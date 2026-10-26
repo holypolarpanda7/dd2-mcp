@@ -108,6 +108,41 @@ def dd2_screenshot() -> str:
 
 
 @mcp.tool()
+def dd2_take_control(unpause: bool = True) -> str:
+    """Bring DD2 to the front for testing: remembers the window the player is in (their terminal), focuses the
+    game and closes the focus-loss pause menu (checked through PauseManager, Esc only while it is open).
+    Pair with dd2_hand_back whenever the player needs to read output or answer."""
+    from . import control
+    return control.take_control(unpause)
+
+
+@mcp.tool()
+def dd2_hand_back() -> str:
+    """Return the screen to the window saved by dd2_take_control (the player's terminal); the game pauses itself."""
+    from . import control
+    return control.hand_back()
+
+
+@mcp.tool()
+def dd2_pause_state() -> str:
+    """Whether the game is paused and by which app.PauseManager.PauseType values (5 = InGame pause menu)."""
+    from . import control
+    return json.dumps(control.pause_state())
+
+
+@mcp.tool()
+def dd2_key(scan: int = 1, focus: bool = True) -> str:
+    """Send one key press (hardware scan code: Esc 0x01, Enter 0x1C, Space 0x39, Tab 0x0F) to the game,
+    focusing it first unless focus=False."""
+    from . import control
+    if focus:
+        r = control._ps("-Action", "focusgame")
+        if not r.startswith("foreground"):
+            return r
+    return control.key(scan)
+
+
+@mcp.tool()
 def dd2_saves(action: str = "list", name: str | None = None) -> str:
     """Save snapshots. action: 'list', 'backup' (name = label), 'restore' (name = snapshot folder; game must be closed)."""
     if action == "list":

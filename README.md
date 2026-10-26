@@ -13,6 +13,8 @@ MCP server for Dragon's Dogma 2 modding through REFramework. Started 2026-10-26 
 | `dd2_install_bridge` | Install the eval bridge (`dd2mcp/lua/dd2mcp_bridge.lua`) into `reframework/autorun` |
 | `dd2_log` | REFramework log for the current run, filtered |
 | `dd2_launch` / `dd2_screenshot` | Start the game through Steam; capture the screen |
+| `dd2_take_control` / `dd2_hand_back` | Bring the game to the front and unpause it for testing; return the screen to the player's terminal (the game auto-pauses) |
+| `dd2_pause_state` / `dd2_key` | PauseManager state (5 = InGame pause menu); send a key press to the game |
 | `dd2_saves` | Snapshot, list and restore the whole save folder (restore needs the game closed) |
 
 Verified engine facts live in the Bastion plan doc. Key one: calls that change game state
