@@ -19,5 +19,7 @@ MCP server for Dragon's Dogma 2 modding through REFramework. Started 2026-10-26 
 
 Verified engine facts live in the Bastion plan doc. Key one: calls that change game state
 (instantiate, getItem, addVersion) only work from `re.on_pre_application_entry("UpdateBehavior")`.
+Call overloads by signature with `D.call(obj, "name(A, B)", ...)`: REFramework only resolves
+signatures with ", " between types, and `obj:call()` with an unresolved one silently does nothing.
 
 Environment: `DD2_GAME` (install path), `DD2_SAVE_BACKUPS`, `DD2_SCRATCH`.

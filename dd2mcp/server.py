@@ -60,10 +60,10 @@ def dd2_items(name: str) -> str:
 @mcp.tool()
 def dd2_give_item(item_id: int, count: int = 1) -> str:
     """Give the player an item (update phase) and report the before/after count in the player's storage.
-    Known limit (2026-10-26): quest letters (category 2) did not arrive through ItemManager.getItem."""
+    Works for every category incl. quest letters (verified with Torn Letter 376, 2026-10-26)."""
     res = game.eval_lua(
         f"local before = D.item_count({item_id})\n"
-        f"sdk.get_managed_singleton('app.ItemManager'):call('getItem(System.Int32,System.Int32,app.Character)', {item_id}, {count}, D.player())\n"
+        f"D.call(sdk.get_managed_singleton('app.ItemManager'), 'getItem(System.Int32, System.Int32, app.Character)', {item_id}, {count}, D.player())\n"
         f"return 'before ' .. before .. ', after ' .. D.item_count({item_id})", phase="update")
     return game.format_result(res)
 

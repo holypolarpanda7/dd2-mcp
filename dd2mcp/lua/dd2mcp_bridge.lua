@@ -11,7 +11,7 @@ local DATA = "dd2mcp/"
 local CMD, RESULT = DATA .. "in.lua", DATA .. "out.json"
 
 D = D or {}
-D.version = "0.2.0"
+D.version = "0.3.0"
 local last_id, next_poll, queued = nil, 0, nil
 
 function D.show(v)
@@ -38,13 +38,23 @@ function D.methods(typename, pat)
                 local params = {}
                 for _, p in ipairs(m:get_param_types() or {}) do params[#params + 1] = p:get_full_name() end
                 local ret = m:get_return_type()
-                res[#res + 1] = td:get_full_name() .. "::" .. name .. "(" .. table.concat(params, ",") .. ")"
+                res[#res + 1] = td:get_full_name() .. "::" .. name .. "(" .. table.concat(params, ", ") .. ")"
                     .. (ret and (" -> " .. ret:get_full_name()) or "")
             end
         end
         td = td:get_parent_type()
     end
     return res
+end
+
+-- Strict call by full signature. REFramework only resolves signatures written with ", "
+-- between parameter types; obj:call() with an unresolved signature silently does nothing
+-- (this hid ItemManager.getItem working, 2026-10-26). Raises instead.
+function D.call(obj, sig, ...)
+    local td = obj:get_type_definition()
+    local m = td:get_method(sig) or td:get_method((sig:gsub(",%s*", ", ")))
+    if not m then error("no method " .. td:get_full_name() .. "::" .. sig, 2) end
+    return m:call(obj, ...)
 end
 
 function D.fields(typename, pat)
