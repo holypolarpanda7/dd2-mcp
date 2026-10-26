@@ -1,17 +1,17 @@
 -- dd2mcp eval bridge (REFramework autorun). Generic dev tool, not part of any mod.
 -- Protocol, files under reframework/data/dd2mcp/:
---   cmd.lua      "--id:<n>" first line, optional "--phase:update" second line, then a Lua chunk
---   result.json  {id, ok, out, ret, err, phase}
+--   in.lua       "--id:<n>" first line, optional "--phase:update" second line, then a Lua chunk
+--   out.json     {id, ok, out, ret, err, phase}
 -- "frame" commands run from re.on_frame (fine for reads). "update" commands run inside
 -- UpdateBehavior: anything that changes game state (spawning, items) silently no-ops elsewhere.
 -- Helpers live on the global D; all REFramework scripts share one Lua state, so mod globals
 -- (e.g. Bastion's H) are reachable from commands.
 
 local DATA = "dd2mcp/"
-local CMD, RESULT = DATA .. "cmd.lua", DATA .. "result.json"
+local CMD, RESULT = DATA .. "in.lua", DATA .. "out.json"
 
 D = D or {}
-D.version = "0.1.0"
+D.version = "0.2.0"
 local last_id, next_poll, queued = nil, 0, nil
 
 function D.show(v)
@@ -135,10 +135,10 @@ local function run(id, body, phase)
     fs.write(RESULT, json.dump_string(res))
 end
 
-local function poll()
+function D.poll()
     local now = os.clock()
     if now < next_poll then return end
-    next_poll = now + 0.2
+    next_poll = now + 0.03
     local ok, s = pcall(fs.read, CMD)
     if not ok or not s or #s == 0 then return end
     local id = s:match("^%-%-id:(%S+)")
@@ -151,18 +151,24 @@ local function poll()
     end
 end
 
-if not D.hooked then
+function D.update()
+    if queued then
+        local q = queued
+        queued = nil
+        run(q.id, q.body, "update")
+    end
+end
+
+-- Registered once per game run; they call through D, so reloading this file swaps the logic.
+if not D.hooked_v2 then
     re.on_frame(function()
-        local ok, err = pcall(poll)
+        local ok, err = pcall(D.poll)
         if not ok then log.error("[dd2mcp] " .. tostring(err)) end
     end)
     re.on_pre_application_entry("UpdateBehavior", function()
-        if queued then
-            local q = queued
-            queued = nil
-            run(q.id, q.body, "update")
-        end
+        local ok, err = pcall(D.update)
+        if not ok then log.error("[dd2mcp] " .. tostring(err)) end
     end)
-    D.hooked = true
+    D.hooked_v2 = true
 end
 log.info("[dd2mcp] bridge " .. D.version .. " loaded")

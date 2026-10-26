@@ -136,7 +136,7 @@ def dd2_key(scan: int = 1, focus: bool = True) -> str:
     focusing it first unless focus=False."""
     from . import control
     if focus:
-        r = control._ps("-Action", "focusgame")
+        r = control.win("focusgame")
         if not r.startswith("foreground"):
             return r
     return control.key(scan)

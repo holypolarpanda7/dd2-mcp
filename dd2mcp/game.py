@@ -52,17 +52,17 @@ def eval_lua(code: str, phase: str = "frame", timeout: float = 15) -> dict:
     BRIDGE_DIR.mkdir(parents=True, exist_ok=True)
     cid = str(time.time_ns())
     header = f"--id:{cid}\n" + ("--phase:update\n" if phase == "update" else "")
-    (BRIDGE_DIR / "cmd.lua").write_text(header + code + "\n")
-    res_path = BRIDGE_DIR / "result.json"
+    (BRIDGE_DIR / "in.lua").write_text(header + code + "\n")
+    res_path = BRIDGE_DIR / "out.json"
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
             res = json.loads(res_path.read_text())
             if res.get("id") == cid:
                 return res
-        except (FileNotFoundError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError):  # 9p mount: a read can race the game's write
             pass
-        time.sleep(0.15)
+        time.sleep(0.02)
     hint = "game not running" if not running() else (
         "bridge not loaded (dd2_install_bridge, then restart the game)" if not bridge_installed()
         else "no answer: game paused in the background for update-phase calls, loading, or the bridge errored (dd2_log)")
