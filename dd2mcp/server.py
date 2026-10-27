@@ -69,6 +69,19 @@ def dd2_give_item(item_id: int, count: int = 1) -> str:
 
 
 @mcp.tool()
+def dd2_recent_items(limit: int = 25, name: str | None = None) -> str:
+    """Item log: the most recently changed inventory entries across player, pawn and stash storages,
+    newest first (StorageData._UpdateIndex order; DD2 keeps no pickup history). Shows owner, count,
+    subcategory, key-item flag (key items sit in their own inventory tab) and the NEW mark."""
+    pat = json.dumps(name) if name else "nil"
+    res = game.eval_lua(
+        f"for _, r in ipairs(D.recent_items({int(limit)}, {pat})) do\n"
+        "  print(r.upd, r.owner, r.id, r.name, 'x' .. r.num, r.sub, r.key_item and 'KEY' or '', r.new and 'NEW' or '')\n"
+        "end")
+    return game.format_result(res)
+
+
+@mcp.tool()
 def dd2_gold(delta: int = 0) -> str:
     """Read the player's gold and Rift Crystals; a non-zero delta adds (or deducts) gold first."""
     code = ("local im = sdk.get_managed_singleton('app.ItemManager')\n"

@@ -11,7 +11,7 @@ local DATA = "dd2mcp/"
 local CMD, RESULT = DATA .. "in.lua", DATA .. "out.json"
 
 D = D or {}
-D.version = "0.3.0"
+D.version = "0.3.1"
 local last_id, next_poll, queued = nil, 0, nil
 
 function D.show(v)
@@ -115,6 +115,52 @@ function D.item_count(item_id, storage)
         if p:get_field("_ItemId") == item_id then n = n + p:get_field("_Num") end
     end
     return n
+end
+
+-- Most recently changed storage entries across every storage (player, pawns, stash), newest
+-- first. DD2 keeps no pickup log; StorageData._UpdateIndex rises with every add/stack change.
+function D.recent_items(n, pat)
+    local im = sdk.get_managed_singleton("app.ItemManager")
+    local me = D.player():call("get_CharaID")
+    local rows = {}
+    local e = im:get_field("StorageDict"):call("GetEnumerator")
+    while e:call("MoveNext") do
+        local kv = e:call("get_Current")
+        local key, list = kv:get_field("key"), kv:get_field("value")
+        local owner = key == me and "PLAYER" or key == 65535 and "STASH" or ("other " .. tostring(key))
+        for i = 0, list:call("get_Count") - 1 do
+            local p = list:call("get_Item", i):get_field("_Param")
+            local id = p:get_field("_ItemId")
+            local d = im:call("getItemData(System.Int32)", id)
+            local name = d and d:call("get_Name") or "?"
+            if not pat or name:lower():find(pat:lower(), 1, true) then
+                local sub = d and d:get_field("_SubCategory")
+                rows[#rows + 1] = { upd = p:get_field("_UpdateIndex"), owner = owner, id = id, name = name,
+                    num = p:get_field("_Num"), new = p:get_field("_IsNew"), key_item = d and d:call("get_IsKey"),
+                    sub = sub and D.enum_name("app.ItemSubCategory", sub) or nil }
+            end
+        end
+    end
+    table.sort(rows, function(a, b) return a.upd > b.upd end)
+    local res = {}
+    for i = 1, math.min(n or 25, #rows) do res[i] = rows[i] end
+    return res
+end
+
+local enum_cache = {}
+function D.enum_name(typename, value)
+    local c = enum_cache[typename]
+    if not c then
+        c = {}
+        for _, f in ipairs(sdk.find_type_definition(typename):get_fields()) do
+            if f:is_static() then
+                local ok, v = pcall(f.get_data, f, nil)
+                if ok and type(v) == "number" and c[v] == nil then c[v] = f:get_name() end
+            end
+        end
+        enum_cache[typename] = c
+    end
+    return c[value] or tostring(value)
 end
 
 local function run(id, body, phase)

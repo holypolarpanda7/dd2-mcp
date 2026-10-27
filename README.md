@@ -8,6 +8,7 @@ MCP server for Dragon's Dogma 2 modding through REFramework. Started 2026-10-26 
 | `dd2_eval` | Run Lua in the live game; `phase="update"` for anything that changes game state |
 | `dd2_types` | Methods or fields of a managed type |
 | `dd2_items` / `dd2_give_item` | Find item ids by name; give items (update phase) |
+| `dd2_recent_items` | Item log: newest inventory changes across player, pawns and stash (owner, subcategory, key-item, NEW) |
 | `dd2_gold` | Read gold and Rift Crystals; add or deduct gold |
 | `dd2_deploy` | Copy a mod project's `src/reframework/**` into the game |
 | `dd2_install_bridge` | Install the eval bridge (`dd2mcp/lua/dd2mcp_bridge.lua`) into `reframework/autorun` |
