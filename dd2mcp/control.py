@@ -61,8 +61,8 @@ def _wait(cond, limit: float):
             return st, False
 
 
-def key(scan: int) -> str:
-    return win(f"key {scan}")
+def key(scan: int, hold_ms: int | None = None) -> str:
+    return win(f"key {scan} {hold_ms}" if hold_ms else f"key {scan}")
 
 
 def take_control(unpause: bool = True) -> str:

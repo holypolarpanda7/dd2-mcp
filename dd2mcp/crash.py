@@ -105,6 +105,57 @@ def _section(rva: int):
     return None
 
 
+_TEXT = None
+
+
+def _text():
+    """(rva, bytes as a numpy uint8 array) of DD2.exe's first executable section, cached per process."""
+    global _TEXT
+    if _TEXT is None:
+        import numpy as np
+        with open(EXE, "rb") as f:
+            h = f.read(0x1000)
+            pe = struct.unpack_from("<I", h, 0x3C)[0]
+            nsec = struct.unpack_from("<H", h, pe + 6)[0]
+            so = pe + 24 + struct.unpack_from("<H", h, pe + 20)[0]
+            for i in range(nsec):
+                _, vsize, va, rawsize, raw = struct.unpack_from("<8sIIII", h, so + i * 40)
+                if struct.unpack_from("<I", h, so + i * 40 + 36)[0] & 0x20000000:  # IMAGE_SCN_MEM_EXECUTE
+                    # local copy per build: reading ~150 MB from the Windows drive is the slow part
+                    cache = game.SCRATCH / f"text-{build_id()}.bin"
+                    if not cache.exists():
+                        f.seek(raw)
+                        cache.write_bytes(f.read(min(vsize, rawsize)))
+                    _TEXT = (va, np.fromfile(cache, dtype=np.uint8))
+                    break
+    return _TEXT
+
+
+def xrefs(target: int, limit: int = 40) -> list[tuple[int, str]]:
+    """Code that references rva `target`: rel32 call/jmp (E8/E9) to it, or a rip-relative operand pointing at it
+    (globals, vtables, method-info slots). Returns (rva of the instruction, kind) pairs; a numpy scan, ~1-2 s."""
+    import numpy as np
+    va, b = _text()
+    n = len(b) - 5
+
+    def rel_at(i):  # signed int32 at byte offsets i
+        v = (b[i].astype(np.int64) | (b[i + 1].astype(np.int64) << 8) | (b[i + 2].astype(np.int64) << 16)
+             | (b[i + 3].astype(np.int64) << 24))
+        return np.where(v >= 1 << 31, v - (1 << 32), v)
+    out = []
+    head = b[:n]
+    i = np.nonzero((head == 0xE8) | (head == 0xE9))[0]
+    for k in i[(i + va + 5 + rel_at(i + 1)) == target][:limit]:
+        out.append((int(k) + va, "call" if b[k] == 0xE8 else "jmp"))
+    # rip-relative: ModRM mod=00 rm=101, disp32 next; it ends the instruction or an imm8/imm32 follows.
+    i = np.nonzero((head & 0xC7) == 0x05)[0]
+    end = i + va + 5 + rel_at(i + 1)
+    for imm in (0, 1, 4):
+        for k in i[end + imm == target][:limit]:
+            out.append((int(k) + va, f"rip-rel (imm{imm * 8})" if imm else "rip-rel"))
+    return sorted(set(out))[:limit]
+
+
 def disasm(rva: int, length: int = 0x80, mark: int | None = None) -> str:
     """Disassemble DD2.exe code at rva; rip-relative operands get their target RVA annotated."""
     import capstone

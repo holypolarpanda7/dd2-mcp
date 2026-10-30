@@ -152,7 +152,7 @@ def deploy(project: str) -> str:
         return f"no src/reframework in {project}"
     n = 0
     for f in src.rglob("*"):
-        if f.is_file():
+        if f.is_file() and not f.name.startswith("."):  # .gitkeep and friends stay in the repo
             dst = REF / f.relative_to(src)
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(f, dst)
@@ -161,10 +161,47 @@ def deploy(project: str) -> str:
     paks = sorted((root / "build").glob("*.pak")) if (root / "build").is_dir() else []
     if paks:
         (GAME / "pak_mods").mkdir(exist_ok=True)
+        copied, locked = [], []
         for p in paks:
-            shutil.copy2(p, GAME / "pak_mods" / p.name)
-        out.append("paks -> pak_mods: " + ", ".join(p.name for p in paks) + " (loaded at the next game start)")
+            try:
+                shutil.copy2(p, GAME / "pak_mods" / p.name)
+                copied.append(p.name)
+            except PermissionError:  # the running game holds its paks open (2026-10-30)
+                locked.append(p.name)
+        if copied:
+            out.append("paks -> pak_mods: " + ", ".join(copied) + " (loaded at the next game start)")
+        if locked:
+            out.append("pak in use by the running game, not replaced: " + ", ".join(locked))
     return "\n".join(out)
+
+
+def undeploy(project: str) -> str:
+    """Move a project's deployed files (its src/reframework/** and build/*.pak counterparts in the game) out of the
+    game into SaveBackups/undeployed-<project>-<timestamp>, so dev builds never run on the player's own saves. The game
+    must be closed (it holds paks open)."""
+    import time
+    from .saves import BACKUPS
+    if running():
+        return "close the game first (dd2_quit): it holds the paks open"
+    root = pathlib.Path(project)
+    src = root / "src" / "reframework"
+    park = BACKUPS / f"undeployed-{root.name}-{time.strftime('%Y-%m-%d_%H%M%S')}"
+    moved = []
+    targets = [(REF / f.relative_to(src), pathlib.Path("reframework") / f.relative_to(src))
+               for f in src.rglob("*") if f.is_file() and not f.name.startswith(".")] if src.is_dir() else []
+    if (root / "build").is_dir():
+        targets += [(GAME / "pak_mods" / p.name, pathlib.Path("pak_mods") / p.name) for p in (root / "build").glob("*.pak")]
+    for live, rel in targets:
+        if live.exists():
+            dst = park / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(live), dst)
+            moved.append(str(rel))
+    for d in sorted({live.parent for live, _ in targets}, key=lambda x: -len(x.parts)):
+        # only the mod's own folders (reframework/autorun/wizard), never autorun, data or pak_mods themselves
+        if d.is_relative_to(REF) and len(d.relative_to(REF).parts) >= 2 and d.is_dir() and not any(d.iterdir()):
+            d.rmdir()
+    return f"moved {len(moved)} files to {park}" + "".join(f"\n  {m}" for m in moved) if moved else "nothing deployed"
 
 
 def saves_dir() -> pathlib.Path | None:
