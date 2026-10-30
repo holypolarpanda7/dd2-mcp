@@ -143,8 +143,11 @@ def screenshot() -> str:
 
 
 def deploy(project: str) -> str:
-    """Copy <project>/src/reframework/** into the game's reframework folder (only files the project owns)."""
-    src = pathlib.Path(project) / "src" / "reframework"
+    """Copy <project>/src/reframework/** into the game's reframework folder (only files the project owns), and
+    <project>/build/*.pak into <game>/pak_mods (REFramework's IntegrityCheckBypass_LoadPakDirectory injects paks
+    from there; a loose re_chunk_000.pak.patch_NNN.pak is ignored, 2026-10-29)."""
+    root = pathlib.Path(project)
+    src = root / "src" / "reframework"
     if not src.is_dir():
         return f"no src/reframework in {project}"
     n = 0
@@ -154,7 +157,14 @@ def deploy(project: str) -> str:
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(f, dst)
             n += 1
-    return f"deployed {n} files from {src}"
+    out = [f"deployed {n} files from {src}"]
+    paks = sorted((root / "build").glob("*.pak")) if (root / "build").is_dir() else []
+    if paks:
+        (GAME / "pak_mods").mkdir(exist_ok=True)
+        for p in paks:
+            shutil.copy2(p, GAME / "pak_mods" / p.name)
+        out.append("paks -> pak_mods: " + ", ".join(p.name for p in paks) + " (loaded at the next game start)")
+    return "\n".join(out)
 
 
 def saves_dir() -> pathlib.Path | None:
