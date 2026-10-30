@@ -72,6 +72,37 @@ def dd2_rsz(pattern: str = "", fields: bool = False, limit: int = 200, action: s
 
 
 @mcp.tool()
+def dd2_pak(action: str = "find", path: str = "", out: str = "") -> str:
+    """Game pak files without outside tools (pure-Python reader for DD2's 0x68 paks).
+    'list' searches the community file list (regex on paths, e.g. 'gui/ui01/common/job'); 'find' reports which pak
+    holds the newest copy of a path; 'extract' writes it to out (a directory, default research/extract) and, for a
+    .tex, a PNG next to it."""
+    from . import pak
+    if action == "list":
+        return "\n".join(pak.search_list(path or ".", 200)) or "no match"
+    found = pak.find(path)
+    if not found:
+        return f"{path} is in no pak (paths are case-insensitive but need the .N version suffix)"
+    src, data = found
+    if action == "find":
+        return f"{path}: {src.name}, {len(data)} bytes"
+    if action == "extract":
+        import pathlib as _p
+        base = _p.Path(out or "/mnt/d/DD2Modding/research/extract")
+        dst = base / path
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(data)
+        msg = f"wrote {dst} ({len(data)} bytes, from {src.name})"
+        if ".tex." in path:
+            from . import tex
+            png = dst.with_suffix(dst.suffix + ".png")
+            tex.to_image(data).save(png)
+            msg += f"\npng: {png}"
+        return msg
+    return f"unknown action {action!r}"
+
+
+@mcp.tool()
 def dd2_crash(dump: str | None = None) -> str:
     """Analyze the last native crash (reframework_crash.dmp, or a given minidump path): exception, registers,
     disassembly around the fault and stack return addresses, mapped to managed methods through the method map
@@ -194,7 +225,7 @@ def dd2_gold(delta: int = 0) -> str:
 
 @mcp.tool()
 def dd2_deploy(project: str) -> str:
-    """Copy a mod project's src/reframework/** into the game's reframework folder."""
+    """Copy a mod project's src/reframework/** into the game's reframework folder and its build/*.pak into pak_mods."""
     return game.deploy(project)
 
 
