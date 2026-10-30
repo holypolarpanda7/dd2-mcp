@@ -74,6 +74,9 @@ def take_control(unpause: bool = True) -> str:
     if prev.lstrip("-").isdigit():
         STATE.write_text(json.dumps({"cli_hwnd": int(prev), "at": time.time()}))
     out = [win("focusgame")]
+    # Park the pointer in a corner: DD2's menus select whatever row the mouse hovers, so a pointer left over the
+    # pause menu made key navigation start on the wrong row (2026-10-29).
+    win("mouse 1910 1070")
     if not out[0].startswith("foreground"):
         return f"could not focus the game: {out[0]}"
     if unpause:
