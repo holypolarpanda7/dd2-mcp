@@ -131,6 +131,24 @@ def disasm(rva: int, length: int = 0x80, mark: int | None = None) -> str:
     return "\n".join(lines)
 
 
+def windows_events(minutes: int = 180, limit: int = 5) -> list[dict]:
+    """DD2 crashes recorded by Windows (Application log, 'Application Error' 1000): time, module, code, offset.
+    REFramework's dump is not rewritten for every crash (2026-10-29: two crashes left the old dump), Windows always logs."""
+    import subprocess
+    ps = ("Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='Application Error'; "
+          f"StartTime=(Get-Date).AddMinutes(-{minutes})}} -ErrorAction SilentlyContinue | "
+          "Where-Object { $_.Message -match 'DD2.exe' } | Select-Object -First %d | ForEach-Object { "
+          "$_.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss') + '|' + ($_.Properties[3].Value) + '|' + "
+          "('{0:x}' -f $_.Properties[6].Value) + '|' + ('{0:x}' -f $_.Properties[7].Value) }" % limit)
+    out = subprocess.run(["powershell.exe", "-NoProfile", "-Command", ps], capture_output=True, text=True, timeout=60).stdout
+    rows = []
+    for line in out.splitlines():
+        parts = line.strip().split("|")
+        if len(parts) == 4:
+            rows.append({"time": parts[0], "module": parts[1], "code": parts[2], "offset": int(parts[3], 16)})
+    return rows
+
+
 def analyze(path: pathlib.Path = DUMP, stack_bytes: int = 0x800) -> str:
     """Exception, registers, faulting code and stack return-address candidates of a minidump."""
     if not path.exists():
@@ -185,7 +203,19 @@ def analyze(path: pathlib.Path = DUMP, stack_bytes: int = 0x800) -> str:
             if s <= a and a + n <= s + len(b):
                 return b[a - s:a - s + n]
 
-    out = [f"dump {path.name} ({os.path.getsize(path)} bytes, {_mtime(path)}); DD2.exe base "
+    head = []
+    events = windows_events()
+    if events:
+        head.append("Windows crash log (newest first):")
+        for e in events:
+            loc = f"DD2.exe+0x{e['offset']:x}" + (f" {method_at(e['offset'])}" if e["module"].lower() == "dd2.exe" and method_at(e["offset"]) else "")
+            head.append(f"  {e['time']}  {e['code']} in {e['module'] if e['module'].lower() != 'dd2.exe' else loc}"
+                        + (f"+0x{e['offset']:x}" if e["module"].lower() != "dd2.exe" else ""))
+        import datetime
+        newest = datetime.datetime.strptime(events[0]["time"], "%Y-%m-%d %H:%M:%S").timestamp()
+        if path.exists() and newest - path.stat().st_mtime > 30:
+            head.append("  NOTE: the REFramework dump below is OLDER than the newest crash; only the line above is current.")
+    out = head + [f"dump {path.name} ({os.path.getsize(path)} bytes, {_mtime(path)}); DD2.exe base "
            f"{exe_base:x}" if exe_base else "DD2.exe not in module list"]
     if not _map():
         out.append(f"(no method map for build {build_id()}: run dd2_methodmap with the game running)")

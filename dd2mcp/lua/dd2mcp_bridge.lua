@@ -11,7 +11,7 @@ local DATA = "dd2mcp/"
 local CMD, RESULT = DATA .. "in.lua", DATA .. "out.json"
 
 D = D or {}
-D.version = "0.6.0"
+D.version = "0.7.0"
 local next_poll, queued = 0, nil  -- the last command id lives on D (D.last_id) so a reload cannot re-run it
 
 function D.show(v)
@@ -266,6 +266,26 @@ function D.export_methodmap()
     end
     f:close()
     return { base = string.format("%x", base), types = types, methods = n }
+end
+
+-- Quiet test mode: removes world noise that breaks scripted tests. Support pawns walk up to the player
+-- after every load and open a hire dialog that eats menu key presses (2026-10-29, user tip); their sales
+-- approach is gated by AISituationTaskState_StrayPawn_SalesMoveToPlayer.canTalkGreet, forced false here.
+-- Off by default (normal play untouched); the harness turns it on with the save guard.
+D.quiet = D.quiet or { on = false }
+if not D.quiet_hooked then
+    -- canTalkGreet alone did not stop them (2026-10-29), so the sales states' per-frame updates are skipped too.
+    local function skip_when_quiet(tn, name)
+        local td = sdk.find_type_definition(tn)
+        local m = td and td:get_method(name)
+        if not m then log.error("[dd2mcp] quiet: no " .. tn .. "." .. name) return end
+        sdk.hook(m, function() if D.quiet.on then return sdk.PreHookResult.SKIP_ORIGINAL end end, nil)
+    end
+    local greet = sdk.find_type_definition("app.AISituationTaskState_StrayPawn_SalesMoveToPlayer"):get_method("canTalkGreet")
+    sdk.hook(greet, nil, function(ret) if D.quiet.on then return sdk.to_ptr(0) end return ret end)
+    skip_when_quiet("app.AISituationTaskState_StrayPawn_SalesMoveToPlayer", "onUpdate")
+    skip_when_quiet("app.AISituationTaskState_StrayPawn_TalkPlayer", "onUpdate")
+    D.quiet_hooked = true
 end
 
 -- Characters to inspect: "player" or "pawn1".."pawnN" (PawnManager.PawnCharacterList order: party pawns in the world).
