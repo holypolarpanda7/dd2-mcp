@@ -90,7 +90,7 @@ def _boot_and_start(slot: int, log: list) -> dict | None:
         log.append("bridge never answered after launch (dd2_log)")
         return None
     log.append("armed: " + game.format_result(game.eval_lua(
-        'return D.saveguard.arm({ units = { %s }, autosave = false })' % ", ".join(map(str, sorted(saves.TEST_UNITS))))))
+        'D.quiet.on = true return D.saveguard.arm({ units = { %s }, autosave = false })' % ", ".join(map(str, sorted(saves.TEST_UNITS))))))
 
     # Boot screens: "START GAME" takes Enter, the autosave notice takes F. Check before every press so
     # nothing reaches the title menu itself.

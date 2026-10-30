@@ -271,6 +271,43 @@ def dd2_key(scan: int = 1, focus: bool = True) -> str:
     return control.key(scan)
 
 
+KEYS = {"esc": 0x01, "enter": 0x1C, "space": 0x39, "tab": 0x0F, "w": 0x11, "a": 0x1E, "s": 0x1F, "d": 0x20,
+        "f": 0x21, "e": 0x12, "q": 0x10, "g": 0x22, "x": 0x2D, "z": 0x2C, "c": 0x2E}
+
+
+@mcp.tool()
+def dd2_keys(sequence: str, delay: float = 0.35, screenshot: bool = False) -> str:
+    """Send a key sequence in one call (focuses the game once). Tokens separated by spaces or commas: key names
+    (esc enter space tab w a s d f e q g x z c), 'name*N' to repeat, hex scan codes ('0x21'), 'wait:SECONDS'.
+    delay = pause after each key (menus drop presses that arrive faster than ~0.3 s). screenshot=True captures
+    the screen at the end and returns its path. Example: 'esc wait:1 s*4 f wait:1 e'."""
+    from . import control
+    import time
+    r = control.win("focusgame")
+    if not r.startswith("foreground"):
+        return r
+    sent = []
+    for tok in re.split(r"[\s,]+", sequence.strip().lower()):
+        if not tok:
+            continue
+        if tok.startswith("wait:"):
+            time.sleep(float(tok[5:]))
+            sent.append(tok)
+            continue
+        name, _, rep = tok.partition("*")
+        scan = KEYS.get(name) if name in KEYS else int(name, 16) if name.startswith("0x") else None
+        if scan is None:
+            return f"unknown key {name!r} after sending: {' '.join(sent)}"
+        for _ in range(int(rep or 1)):
+            control.key(scan)
+            time.sleep(delay)
+        sent.append(tok)
+    out = "sent: " + " ".join(sent)
+    if screenshot:
+        out += "\nscreenshot: " + game.screenshot()
+    return out
+
+
 @mcp.tool()
 def dd2_saves(action: str = "list", name: str | None = None) -> str:
     """Save snapshots. action: 'list', 'backup' (name = label), 'restore' (name = snapshot folder; game must be closed),
