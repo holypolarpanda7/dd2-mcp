@@ -11,7 +11,7 @@ local DATA = "dd2mcp/"
 local CMD, RESULT = DATA .. "in.lua", DATA .. "out.json"
 
 D = D or {}
-D.version = "0.3.1"
+D.version = "0.4.1"
 local last_id, next_poll, queued = nil, 0, nil
 
 function D.show(v)
@@ -161,6 +161,67 @@ function D.enum_name(typename, value)
         enum_cache[typename] = c
     end
     return c[value] or tostring(value)
+end
+
+-- Save guard for the test harness. Slot = unit*5 + type (Auto 0, Manual 1, Back 2, Clear 3,
+-- AddAuto 4); 3 units. Disarmed it only logs, so normal play is untouched. Armed it refuses
+-- every save outside `units`, and every autosave while `autosave` is false.
+D.saveguard = D.saveguard or { armed = false, autosave = true, units = { [0] = true }, log = {} }
+local SG = D.saveguard
+
+function SG.arm(opts)
+    opts = opts or {}
+    SG.armed = true
+    SG.autosave = opts.autosave == true
+    SG.units = {}
+    for _, u in ipairs(opts.units or { 0 }) do SG.units[u] = true end
+    return SG.status()
+end
+
+function SG.disarm() SG.armed = false; SG.autosave = true; return SG.status() end
+
+function SG.status()
+    local units = {}
+    for u in pairs(SG.units) do units[#units + 1] = u end
+    table.sort(units)
+    return { armed = SG.armed, autosave = SG.autosave, units = units, log = SG.log }
+end
+
+-- Returns true to let the save through.
+function SG.check(kind, slot)
+    local allowed = true
+    if SG.armed and slot ~= -1 then
+        local unit = slot and slot >= 0 and (slot // 5) or nil
+        -- The game autosaves through requestSave(slot) too, so judge by slot type, not method.
+        local auto = kind == "auto" or (slot and slot >= 0 and (slot % 5 == 0 or slot % 5 == 4))
+        allowed = unit ~= nil and SG.units[unit] == true and (SG.autosave or not auto)
+    end
+    table.insert(SG.log, 1, { t = os.date("%H:%M:%S"), kind = kind, slot = slot, allowed = allowed })
+    SG.log[21] = nil
+    return allowed
+end
+
+local function auto_slot()
+    local g = sdk.get_managed_singleton("app.GameSystem")
+    return g and g:call("get_CachedSlotAuto")
+end
+
+if not D.saveguard_hooked then
+    local sdm = sdk.find_type_definition("app.SaveDataManager")
+    local function guard(sig, kind, slot_of)
+        local m = sdm:get_method(sig)
+        if not m then log.error("[dd2mcp] saveguard: no method " .. sig) return end
+        sdk.hook(m, function(args)
+            local ok, allowed = pcall(function() return SG.check(kind, slot_of(args)) end)
+            if ok and not allowed then return sdk.PreHookResult.SKIP_ORIGINAL end
+        end, function(r) return r end)
+    end
+    local function arg_slot(args) return ((sdk.to_int64(args[3]) & 0xFFFFFFFF) ~ 0x80000000) - 0x80000000 end
+    guard("requestSaveAuto(app.SaveDataManager.SaveLoadRequestArgs, System.UInt32[])", "auto", function() return auto_slot() end)
+    guard("requestSaveManual(System.Int32, app.SaveDataManager.SaveLoadRequestArgs, System.UInt32[])", "manual", arg_slot)
+    guard("requestSaveSlot(System.Int32, app.SaveDataManager.SaveLoadRequestArgs, System.UInt32[])", "slot", arg_slot)
+    guard("requestSave(System.Int32, app.SaveDataManager.SaveLoadRequestArgs, System.UInt32[])", "raw", arg_slot)
+    D.saveguard_hooked = true
 end
 
 local function run(id, body, phase)

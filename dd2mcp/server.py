@@ -167,6 +167,37 @@ def dd2_saves(action: str = "list", name: str | None = None) -> str:
     return f"unknown action {action!r}"
 
 
+@mcp.tool()
+def dd2_scenario(action: str = "list", name: str | None = None, slot: int | None = None,
+                 area: str = "", notes: str = "") -> str:
+    """Test-harness save scenarios (single slots of the test character unit, default unit 0 = slots 0-4).
+    action: 'list'; 'shelve' (name, slot, optional area/notes) archives a live slot; 'unshelve' (name) puts it
+    back into its own slot (game must be closed). Slot types: 0 Auto, 1 Last Inn Rest, 2 unmoored-world
+    restart, 3 Clear, 4 AddAuto. Then launch, arm dd2_saveguard, and load from the title menu."""
+    if action == "list":
+        return saves.scenario_list()
+    if action == "shelve":
+        return saves.shelve(name, slot, area, notes) if name and slot is not None else "shelve needs name and slot"
+    if action == "unshelve":
+        return saves.unshelve(name) if name else "unshelve needs name"
+    return f"unknown action {action!r}"
+
+
+@mcp.tool()
+def dd2_saveguard(action: str = "status", autosave: bool = False, units: list[int] | None = None) -> str:
+    """Bridge save guard. 'arm' refuses every save outside the test units (default [0]) and, unless
+    autosave=True, every save to an Auto/AddAuto slot (the game also saves slot 0 on load). 'disarm', 'status'.
+    Arm before loading a scenario so the load-time autosave cannot overwrite it. Resets on game restart."""
+    if action == "arm":
+        opts = json.dumps({"units": units or [0], "autosave": autosave})
+        code = f"return D.saveguard.arm(json.load_string({opts!r}))"
+    elif action == "disarm":
+        code = "return D.saveguard.disarm()"
+    else:
+        code = "return D.saveguard.status()"
+    return game.format_result(game.eval_lua(code, timeout=10))
+
+
 def main():
     mcp.run(transport="stdio")
 
