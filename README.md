@@ -17,6 +17,8 @@ MCP server for Dragon's Dogma 2 modding through REFramework. Started 2026-10-26 
 | `dd2_take_control` / `dd2_hand_back` | Bring the game to the front and unpause it for testing; return the screen to the player's terminal (the game auto-pauses) |
 | `dd2_pause_state` / `dd2_key` | PauseManager state (5 = InGame pause menu); send a key press to the game |
 | `dd2_saves` | Snapshot, list and restore the whole save folder (restore needs the game closed) |
+| `dd2_scenario` | Test scenarios: shelve/unshelve single slots of the test character, or `load` one end to end (restart, unshelve, launch, guard, title menu, play-time + position check; ~50 s) |
+| `dd2_saveguard` | Arm/disarm the bridge save guard: refuses saves outside the test character and all autosaves while armed |
 
 Verified engine facts live in the Bastion plan doc. Key one: calls that change game state
 (instantiate, getItem, addVersion) only work from `re.on_pre_application_entry("UpdateBehavior")`.
@@ -24,3 +26,13 @@ Call overloads by signature with `D.call(obj, "name(A, B)", ...)`: REFramework o
 signatures with ", " between types, and `obj:call()` with an unresolved one silently does nothing.
 
 Environment: `DD2_GAME` (install path), `DD2_SAVE_BACKUPS`, `DD2_SCRATCH`.
+
+## Save harness
+
+DD2 keeps 15 save slots: 3 characters x 5 types (slot = unit*5 + type; 0 Auto, 1 Last Inn Rest,
+2 unmoored-world restart, 3 Clear, 4 AddAuto). Scenarios are single slot files under
+`SaveBackups/scenarios/<name>/` and only load from the slot they were saved in. Steam Cloud serves the
+game, so swaps happen with the game closed (Steam rescans at launch); deleting a file outside the game does
+not stick. `dd2_scenario load` points the character's "latest save" at the slot and confirms
+"Load from Last Saved Data"; calling `app.MainFlowManager.requestStartType` directly throws (and once
+crashed the game). The test character unit defaults to 0 (`DD2_TEST_UNITS`).
