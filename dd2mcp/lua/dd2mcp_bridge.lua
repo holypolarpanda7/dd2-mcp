@@ -11,8 +11,8 @@ local DATA = "dd2mcp/"
 local CMD, RESULT = DATA .. "in.lua", DATA .. "out.json"
 
 D = D or {}
-D.version = "0.4.1"
-local last_id, next_poll, queued = nil, 0, nil
+D.version = "0.5.1"
+local next_poll, queued = 0, nil  -- the last command id lives on D (D.last_id) so a reload cannot re-run it
 
 function D.show(v)
     local t = type(v)
@@ -163,6 +163,73 @@ function D.enum_name(typename, value)
     return c[value] or tostring(value)
 end
 
+-- Every named value of an enum type, sorted by value: { {name=, value=}, ... }.
+function D.enum(typename)
+    local td = sdk.find_type_definition(typename)
+    if not td then error("no type " .. typename, 2) end
+    local res = {}
+    for _, f in ipairs(td:get_fields()) do
+        if f:is_static() and f:get_name() ~= "value__" then
+            local ok, v = pcall(f.get_data, f, nil)
+            if ok and type(v) == "number" then res[#res + 1] = { name = f:get_name(), value = v } end
+        end
+    end
+    table.sort(res, function(a, b) return a.value < b.value end)
+    return res
+end
+
+-- Weapon item params: id, name, WeaponID name, _Job mask (1 << JobEnum) and its vocations, stats.
+function D.weapons()
+    local im = sdk.get_managed_singleton("app.ItemManager")
+    local e = im:get_field("_ItemDataDict"):call("GetEnumerator")
+    local rows = {}
+    while e:call("MoveNext") do
+        local p = e:call("get_Current"):get_field("value")
+        if p and p:get_type_definition():get_full_name() == "app.ItemWeaponParam" then
+            local mask, jobs = p:get_field("_Job"), {}
+            for j = 1, 15 do if mask & (1 << j) ~= 0 then jobs[#jobs + 1] = j end end
+            local ok, name = pcall(p.call, p, "get_Name")
+            rows[#rows + 1] = { id = p:get_field("_Id"), name = ok and name or "?",
+                weapon = D.enum_name("app.WeaponID", p:get_field("_WeaponId")), job_mask = mask, jobs = jobs,
+                equip = D.enum_name("app.ItemEquipCategory", p:get_field("_EquipCategory")), lv = p:get_field("_Lv"),
+                phys = p:get_field("_PhysicalAttack"), magic = p:get_field("_MagicAttack"),
+                model = p:get_field("_ModelId") }
+        end
+    end
+    table.sort(rows, function(a, b) return a.id < b.id end)
+    return rows
+end
+
+-- Characters to inspect: "player" or "pawn1".."pawnN" (PawnManager.PawnCharacterList order: party pawns in the world).
+function D.party()
+    local pm = sdk.get_managed_singleton("app.PawnManager")
+    local res = { player = D.player() }
+    local list = pm and pm:call("get_PawnCharacterList")
+    if list then
+        for i = 0, list:call("get_Count") - 1 do res["pawn" .. (i + 1)] = list:call("get_Item", i) end
+    end
+    return res
+end
+
+-- Vocation state of a character (default the player): job, exp per job, job bits.
+function D.job(who)
+    local party = D.party()
+    local c = party[who or "player"]
+    if not c then
+        local have = {}
+        for k in pairs(party) do have[#have + 1] = k end
+        table.sort(have)
+        error("no character " .. tostring(who) .. " (present: " .. table.concat(have, ", ") .. ")", 0)
+    end
+    local jc = c:call("get_Human"):call("get_JobContext")
+    local exp, ce = {}, jc:get_field("CulmativeExp")
+    for i = 0, ce:get_size() - 1 do exp[i + 1] = ce:get_element(i):get_field("m_value") end  -- boxed Int32
+    local job = jc:get_field("CurrentJob")
+    return { who = who or "player", chara = c:call("get_CharaIDString"), job = job,
+        job_name = D.enum_name("app.Character.JobEnum", job), job_index = jc:call("get_JobIndex"), exp = exp,
+        changed_bits = jc:get_field("ChangedJobBits"), qualified_bits = jc:get_field("QualifiedJobBits") }
+end
+
 -- Save guard for the test harness. Slot = unit*5 + type (Auto 0, Manual 1, Back 2, Clear 3,
 -- AddAuto 4); 3 units. Disarmed it only logs, so normal play is untouched. Armed it refuses
 -- every save outside `units`, and every autosave while `autosave` is false.
@@ -259,8 +326,8 @@ function D.poll()
     local ok, s = pcall(fs.read, CMD)
     if not ok or not s or #s == 0 then return end
     local id = s:match("^%-%-id:(%S+)")
-    if not id or id == last_id then return end
-    last_id = id
+    if not id or id == D.last_id then return end
+    D.last_id = id
     if s:match("\n%-%-phase:update") then
         queued = { id = id, body = s }
     else
