@@ -10,7 +10,10 @@ MCP server for Dragon's Dogma 2 modding through REFramework. Started 2026-10-26 
 | `dd2_enum` | Every named value of an enum type (e.g. `app.Character.JobEnum`) |
 | `dd2_rsz` | Offline search of the type dump (alphaZomega's RE_RSZ `rszdd2.json`): every serializable type and its fields, no game needed; `action="download"` fetches it |
 | `dd2_weapons` | Weapon item table: WeaponID, vocation mask (`_Job` = 1 << JobEnum), stats; filter by job, WeaponID prefix or name |
-| `dd2_job` | Vocation state of the player or a pawn (job, exp per job, job bits); `set_job` changes it (jobs above 10 need `force`: they crash the game) |
+| `dd2_job` | Vocation state of the player or a pawn (job, exp per job, job bits); `set_job` changes it (jobs above 10 need `force`: they crash the game unless a mod grows the per-job tables first) |
+| `dd2_crash` | Analyze the last native crash (`reframework_crash.dmp`): exception, registers, disassembly at the fault, stack return addresses mapped to managed methods; no game needed |
+| `dd2_methodmap` | Managed method -> native code RVA map per game build (`research/methodmap-<build>.tsv`): `export` from the running game, `find` by regex |
+| `dd2_disasm` | Disassemble DD2.exe from disk at an RVA or a method name; rip-relative globals annotated (poke live with `D.poke32`) |
 | `dd2_items` / `dd2_give_item` | Find item ids by name; give items (update phase) |
 | `dd2_recent_items` | Item log: newest inventory changes across player, pawns and stash (owner, subcategory, key-item, NEW) |
 | `dd2_gold` | Read gold and Rift Crystals; add or deduct gold |

@@ -1,5 +1,6 @@
 """MCP server: Dragon's Dogma 2 modding through REFramework (live Lua eval, introspection, deploy, saves)."""
 import json
+import re
 
 from mcp.server.mcpserver import MCPServer
 
@@ -12,7 +13,7 @@ mcp = MCPServer(
         "use phase='update' for anything that changes game state (spawning prefabs, giving items, gold): "
         "the same call made from the frame phase silently does nothing. Helpers on the Lua global D: "
         "D.methods(type, pat), D.fields(type, pat), D.player(), D.player_pos(), D.find_items(name), "
-        "D.item_count(id). Mod globals (e.g. Bastion's H) are reachable too. Snapshot saves (dd2_saves) "
+        "D.item_count(id), D.peek/D.poke32(addr, v), D.fnaddr(type, method), D.module_base(). Mod globals (e.g. Bastion's H) are reachable too. Snapshot saves (dd2_saves) "
         "before testing anything that writes game state: autosaves overwrite the play-through."
     ),
 )
@@ -71,6 +72,47 @@ def dd2_rsz(pattern: str = "", fields: bool = False, limit: int = 200, action: s
 
 
 @mcp.tool()
+def dd2_crash(dump: str | None = None) -> str:
+    """Analyze the last native crash (reframework_crash.dmp, or a given minidump path): exception, registers,
+    disassembly around the fault and stack return addresses, mapped to managed methods through the method map
+    of this game build (dd2_methodmap). No game needed."""
+    from . import crash
+    import pathlib
+    return crash.analyze(pathlib.Path(dump) if dump else crash.DUMP)
+
+
+@mcp.tool()
+def dd2_methodmap(action: str = "status", pattern: str | None = None) -> str:
+    """Map of managed method -> native code RVA for the installed game build (research/methodmap-<build>.tsv).
+    'export' builds it from the running game (~1 s, needs bridge 0.6.0+); 'find' lists methods whose
+    'Type.method(params)' matches the regex pattern; 'status' says whether a map exists for this build."""
+    from . import crash
+    if action == "export":
+        return crash.export_methodmap()
+    if action == "find":
+        rows = crash.find_method(pattern or ".", limit=50)
+        return "\n".join(f"{a:x}  {n}" for a, n in rows) or "no match (or no map: export first)"
+    p = crash.map_path()
+    return f"build {crash.build_id()}: " + (f"{p} ({sum(1 for _ in open(p))} methods)" if p.exists() else "no map yet (export)")
+
+
+@mcp.tool()
+def dd2_disasm(target: str, length: int = 0x100) -> str:
+    """Disassemble DD2.exe code from disk: target is an RVA in hex ('823c230') or a regex for a method in the
+    method map ('JobContext.get_JobIndex'). rip-relative operands are annotated with their target RVA
+    (globals the compiled code reads; poke them live with D.poke32(D.module_base() + rva, v))."""
+    from . import crash
+    if re.fullmatch(r"(0x)?[0-9a-fA-F]+", target):
+        rva, head = int(target, 16), ""
+    else:
+        rows = crash.find_method(target, limit=5)
+        if not rows:
+            return f"no method matches /{target}/ (export the map with dd2_methodmap)"
+        rva, head = rows[0][0], f"{rows[0][1]} @ {rows[0][0]:x}" + (f" (also: {', '.join(n for _, n in rows[1:])})" if len(rows) > 1 else "") + "\n"
+    return head + crash.disasm(rva, length)
+
+
+@mcp.tool()
 def dd2_weapons(job: int | None = None, weapon_prefix: str | None = None, name: str | None = None) -> str:
     """Weapon item table: id, name, WeaponID name, vocation mask (_Job = 1 << JobEnum) and stats.
     Filter by job (JobEnum 1-10), WeaponID prefix (e.g. 'wp07') or name substring. No filter = counts per type."""
@@ -95,8 +137,9 @@ def dd2_weapons(job: int | None = None, weapon_prefix: str | None = None, name: 
 @mcp.tool()
 def dd2_job(who: str = "player", set_job: int | None = None, force: bool = False) -> str:
     """Vocation state of 'player' or 'pawn1'..'pawn3': current job, JobIndex, exp per job, job bits.
-    set_job changes the vocation (update phase). Jobs above 10 crashed the game (2026-10-29: c0000005 ~1 min
-    after set_Job(11)), so they need force=True and belong only on a test character with the save guard armed."""
+    set_job changes the vocation (update phase). Jobs above 10 crash the game unless a mod first grows the
+    per-job tables (2026-10-29: Wizard jobtables.lua), so they need force=True and belong only on a test
+    character with the save guard armed."""
     if set_job is not None:
         if set_job > 10 and not force:
             return "refused: job > 10 crashed the game; pass force=True on a test character with the save guard armed"
