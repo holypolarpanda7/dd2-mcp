@@ -11,7 +11,7 @@ local DATA = "dd2mcp/"
 local CMD, RESULT = DATA .. "in.lua", DATA .. "out.json"
 
 D = D or {}
-D.version = "0.5.1"
+D.version = "0.6.0"
 local next_poll, queued = 0, nil  -- the last command id lives on D (D.last_id) so a reload cannot re-run it
 
 function D.show(v)
@@ -198,6 +198,74 @@ function D.weapons()
     end
     table.sort(rows, function(a, b) return a.id < b.id end)
     return rows
+end
+
+-- Native memory. REFramework Lua has no raw write: sdk.to_valuetype copies the bytes, so writes to it
+-- go nowhere. Pokes go through the game's own System.Buffer.Memmove(byte&, byte&, nuint) from a
+-- managed buffer (verified 2026-10-29 on the job-count global).
+function D.addr(p) return tonumber(tostring(p):match("(%x+)$"), 16) end
+
+function D.peek(addr, kind)
+    local vt = sdk.to_valuetype(addr, "System.UInt64")
+    if kind == "u64" then return vt:read_qword(0) end
+    if kind == "u8" then return vt:read_byte(0) end
+    return vt:read_dword(0)
+end
+
+local memmove
+function D.poke32(addr, value)
+    memmove = memmove or sdk.find_type_definition("System.Buffer"):get_method("Memmove(System.Byte, System.Byte, System.UIntPtr)")
+    local src = sdk.create_managed_array("System.Int32", 1):add_ref()
+    src[0] = value
+    memmove:call(nil, sdk.to_ptr(addr), sdk.to_ptr(src:get_address() + 0x20), sdk.to_ptr(4))
+    return D.peek(addr)
+end
+
+-- Native code address of a managed method ("app.JobContext", "get_JobIndex" or a full signature).
+function D.fnaddr(typename, method)
+    local td = sdk.find_type_definition(typename)
+    local m = td and td:get_method(method)
+    if not m then error("no method " .. typename .. "::" .. method, 2) end
+    return D.addr(m:get_function())
+end
+
+-- DD2.exe load address: walk down from a method's code in 64 KB steps to the "MZ" header.
+-- The image is mapped contiguously, so every probe stays inside it until the header.
+function D.module_base()
+    if D._base then return D._base end
+    local a = D.fnaddr("app.JobContext", "get_JobIndex") & ~0xffff
+    for _ = 1, 0x10000 do
+        if D.peek(a, "u8") == 0x4d and (D.peek(a) & 0xffff) == 0x5a4d then
+            local pe = D.peek(a + 0x3c)
+            if pe > 0 and pe < 0x1000 and D.peek(a + pe) == 0x4550 then D._base = a return a end
+        end
+        a = a - 0x10000
+    end
+    error("module base not found")
+end
+
+-- Every method of the types listed in dd2mcp/typenames.txt as "rva<TAB>Type.method(params)" lines
+-- into dd2mcp/methodmap.tsv (maps crash addresses back to methods; one export per game build).
+function D.export_methodmap()
+    local base, n, types = D.module_base(), 0, 0
+    local f = assert(io.open(DATA .. "methodmap.tsv", "w"))
+    for name in io.lines(DATA .. "typenames.txt") do
+        local td = sdk.find_type_definition(name)
+        if td then
+            types = types + 1
+            for _, m in ipairs(td:get_methods() or {}) do
+                local p = D.addr(m:get_function())
+                if p and p > base then
+                    local ps = {}
+                    for _, t in ipairs(m:get_param_types() or {}) do ps[#ps + 1] = t:get_full_name() end
+                    f:write(string.format("%x\t%s.%s(%s)\n", p - base, name, m:get_name(), table.concat(ps, ", ")))
+                    n = n + 1
+                end
+            end
+        end
+    end
+    f:close()
+    return { base = string.format("%x", base), types = types, methods = n }
 end
 
 -- Characters to inspect: "player" or "pawn1".."pawnN" (PawnManager.PawnCharacterList order: party pawns in the world).
