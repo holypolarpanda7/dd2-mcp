@@ -26,6 +26,9 @@ def dd2_status() -> str:
              f"install: {game.GAME}",
              f"REFramework: {game.refw_revision() or 'NOT installed'}",
              f"bridge script: {'installed' if game.bridge_installed() else 'missing (dd2_install_bridge)'}"]
+    crash = game.crash_info()
+    if crash:
+        lines.append("CRASH in the last run's log:\n" + crash)
     if pid:
         res = game.eval_lua("return D.version, D.player_pos()", timeout=5)
         lines.append("bridge: " + (game.format_result(res) if res.get("ok") else res.get("err", "?")))
@@ -47,6 +50,62 @@ def dd2_types(type_name: str, kind: str = "methods", filter: str | None = None) 
     res = game.eval_lua(f"local r = {fn}({json.dumps(type_name)}, {pat})\n"
                         "if type(r) == 'table' then for _, l in ipairs(r) do print(l) end else print(r) end")
     return game.format_result(res)
+
+
+@mcp.tool()
+def dd2_enum(type_name: str) -> str:
+    """Every named value of an enum type, sorted by value (e.g. 'app.Character.JobEnum', 'app.WeaponID')."""
+    res = game.eval_lua(f"for _, e in ipairs(D.enum({json.dumps(type_name)})) do print(e.value, e.name) end", timeout=30)
+    return game.format_result(res)
+
+
+@mcp.tool()
+def dd2_rsz(pattern: str = "", fields: bool = False, limit: int = 200, action: str = "search") -> str:
+    """Offline type dump search (alphaZomega RE_RSZ rszdd2.json, all serializable types + fields; no game needed).
+    pattern is a case-insensitive regex on type names (and field names/types when fields=True).
+    action='download' fetches/refreshes the dump. The dump can lag game patches: confirm live with dd2_types."""
+    from . import rsz
+    if action == "download":
+        return rsz.download()
+    return rsz.search(pattern, fields, limit) if pattern else "search needs pattern"
+
+
+@mcp.tool()
+def dd2_weapons(job: int | None = None, weapon_prefix: str | None = None, name: str | None = None) -> str:
+    """Weapon item table: id, name, WeaponID name, vocation mask (_Job = 1 << JobEnum) and stats.
+    Filter by job (JobEnum 1-10), WeaponID prefix (e.g. 'wp07') or name substring. No filter = counts per type."""
+    flt = json.dumps({"job": job, "prefix": weapon_prefix, "name": name})
+    code = ("local f = json.load_string(" + repr(flt) + ")\n"
+            "local groups, n = {}, 0\n"
+            "for _, w in ipairs(D.weapons()) do\n"
+            "  local okj = not f.job or (w.job_mask & (1 << f.job)) ~= 0\n"
+            "  local okp = not f.prefix or w.weapon:sub(1, #f.prefix) == f.prefix\n"
+            "  local okn = not f.name or w.name:lower():find(f.name:lower(), 1, true)\n"
+            "  if okj and okp and okn then\n"
+            "    n = n + 1\n"
+            "    if f.job or f.prefix or f.name then print(w.id, w.name, w.weapon, 'mask ' .. w.job_mask, w.equip, 'lv' .. w.lv, 'P' .. w.phys, 'M' .. w.magic)\n"
+            "    else local k = w.weapon:sub(1, 4) .. ' mask ' .. w.job_mask; groups[k] = (groups[k] or 0) + 1 end\n"
+            "  end\n"
+            "end\n"
+            "for k, c in pairs(groups) do print(k, c) end\n"
+            "return n .. ' weapons'")
+    return game.format_result(game.eval_lua(code, timeout=30))
+
+
+@mcp.tool()
+def dd2_job(who: str = "player", set_job: int | None = None, force: bool = False) -> str:
+    """Vocation state of 'player' or 'pawn1'..'pawn3': current job, JobIndex, exp per job, job bits.
+    set_job changes the vocation (update phase). Jobs above 10 crashed the game (2026-10-29: c0000005 ~1 min
+    after set_Job(11)), so they need force=True and belong only on a test character with the save guard armed."""
+    if set_job is not None:
+        if set_job > 10 and not force:
+            return "refused: job > 10 crashed the game; pass force=True on a test character with the save guard armed"
+        res = game.eval_lua(f"local c = D.party()[{json.dumps(who)}]\n"
+                            f"c:call('get_Human'):call('get_JobContext'):call('set_Job(app.Character.JobEnum)', {int(set_job)})",
+                            phase="update", timeout=15)
+        if not res.get("ok"):
+            return game.format_result(res)
+    return game.format_result(game.eval_lua(f"return D.job({json.dumps(who)})", timeout=15))
 
 
 @mcp.tool()
@@ -97,9 +156,10 @@ def dd2_deploy(project: str) -> str:
 
 
 @mcp.tool()
-def dd2_install_bridge() -> str:
-    """Install or update the dd2mcp eval bridge script in reframework/autorun."""
-    return game.install_bridge()
+def dd2_install_bridge(reload: bool = True) -> str:
+    """Install or update the dd2mcp eval bridge script in reframework/autorun; reload=True also re-runs it in
+    the running game (bridge 0.5.0+ in memory), so bridge changes need no restart."""
+    return game.reload_bridge() if reload else game.install_bridge()
 
 
 @mcp.tool()
@@ -112,6 +172,19 @@ def dd2_log(pattern: str | None = None, lines: int = 60) -> str:
 def dd2_launch() -> str:
     """Start DD2 through Steam (no-op if it is running). Loading a save still needs the player."""
     return game.launch()
+
+
+@mcp.tool()
+def dd2_quit(since: str | None = None) -> str:
+    """Close DD2 (hard kill: DD2 has no scripted clean exit yet; with the save guard armed nothing is lost) as soon
+    as in-game testing ends. since = 'YYYY-MM-DD HH:MM[:SS]' also reports saves written since then (test units only?)."""
+    from . import harness
+    if not game.running():
+        out = "DD2 is not running"
+    else:
+        harness._kill_game()
+        out = "DD2 closed" if not game.running() else "DD2 still running after kill"
+    return out + ("\n" + saves.touched(since) if since else "")
 
 
 @mcp.tool()
@@ -157,9 +230,12 @@ def dd2_key(scan: int = 1, focus: bool = True) -> str:
 
 @mcp.tool()
 def dd2_saves(action: str = "list", name: str | None = None) -> str:
-    """Save snapshots. action: 'list', 'backup' (name = label), 'restore' (name = snapshot folder; game must be closed)."""
+    """Save snapshots. action: 'list', 'backup' (name = label), 'restore' (name = snapshot folder; game must be closed),
+    'touched' (name = 'YYYY-MM-DD HH:MM[:SS]'): save files written since then, flagging any outside the test units."""
     if action == "list":
         return saves.listing()
+    if action == "touched":
+        return saves.touched(name) if name else "touched needs name = a start time"
     if action == "backup":
         return saves.backup(name or "manual")
     if action == "restore":

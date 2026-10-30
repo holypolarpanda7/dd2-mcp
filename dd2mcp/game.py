@@ -47,6 +47,18 @@ def install_bridge() -> str:
     return "bridge copied to reframework/autorun; it loads on the next game start or REFramework script reset"
 
 
+def reload_bridge() -> str:
+    """Copy the bridge into the game and re-run it in place (no restart). Its callbacks are registered once
+    per game run and call through D, so a reload swaps the logic; the running version must be 0.5.0+
+    (older ones forget the last command id and would re-run the reload)."""
+    msg = install_bridge()
+    if not running():
+        return msg
+    win = subprocess.run(["wslpath", "-w", str(REF / "autorun" / "dd2mcp_bridge.lua")], capture_output=True, text=True).stdout.strip()
+    res = eval_lua(f"local f = assert(loadfile({json.dumps(win)})); f(); return D.version", timeout=10)
+    return msg + "\nreloaded: " + format_result(res)
+
+
 def eval_lua(code: str, phase: str = "frame", timeout: float = 15) -> dict:
     """Run a Lua chunk in the game through the bridge. phase='update' runs it inside UpdateBehavior."""
     BRIDGE_DIR.mkdir(parents=True, exist_ok=True)
@@ -91,6 +103,21 @@ def log_tail(pattern: str | None = None, lines: int = 60, since_start: bool = Tr
         text = [t for t in text if pat in t.lower()]
     mtime = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(LOG.stat().st_mtime))
     return f"log modified {mtime}\n" + "\n".join(text[-lines:])
+
+
+def crash_info() -> str | None:
+    """The crash record of the current/last game run from the REFramework log, if any."""
+    if not LOG.exists():
+        return None
+    text = LOG.read_text(errors="replace").splitlines()
+    for i in range(len(text) - 1, -1, -1):
+        if "REFramework entry" in text[i] or "Logging initialized" in text[i]:
+            text = text[i:]
+            break
+    for i, line in enumerate(text):
+        if "Exception occurred" in line:
+            return "\n".join(text[i:i + 6])
+    return None
 
 
 def launch() -> str:

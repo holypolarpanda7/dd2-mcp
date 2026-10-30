@@ -138,3 +138,26 @@ def unshelve(name: str) -> str:
     os.utime(live / slot_file(slot))  # newer than the cloud copy, so Steam uploads instead of restoring
     return (f"{before}\nunshelved {name} into slot {slot} ({slot_file(slot)}). The title menu's cards come "
             f"from cached system data and may show old details; the load itself uses this file.")
+
+
+def touched(since: str) -> str:
+    """Save files written after `since` ('YYYY-MM-DD HH:MM[:SS]', local time), flagged by unit.
+    Proves after a test (or a crash) that only test-unit slots changed."""
+    src = game.saves_dir()
+    if not src:
+        return "DD2 save folder not found"
+    fmt = "%Y-%m-%d %H:%M:%S" if since.count(":") == 2 else "%Y-%m-%d %H:%M"
+    t0 = time.mktime(time.strptime(since, fmt))
+    lines, bad = [], 0
+    for f in _files(src):
+        if f.stat().st_mtime <= t0:
+            continue
+        name = f.name
+        slot = -1 if name == "data00-1.bin" else 0 if name == "data000.bin" else int(name[4:7])
+        unit = "system" if slot < 0 else f"unit {slot // 5}"
+        ok = slot < 0 or slot // 5 in TEST_UNITS
+        bad += not ok
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(f.stat().st_mtime))
+        lines.append(f"  {name:18} slot {slot:>2} ({unit}) {stamp}" + ("" if ok else "  <-- NOT A TEST UNIT"))
+    head = f"saves written since {since}: {len(lines)}" + (f", {bad} OUTSIDE the test units" if bad else ", all test units/system")
+    return "\n".join([head] + lines)

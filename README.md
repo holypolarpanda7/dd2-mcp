@@ -4,19 +4,24 @@ MCP server for Dragon's Dogma 2 modding through REFramework. Started 2026-10-26 
 
 | Tool | What it does |
 | --- | --- |
-| `dd2_status` | Game process, REFramework revision, bridge state, player position |
+| `dd2_status` | Game process, REFramework revision, bridge state, player position, and the crash record if the last run crashed |
 | `dd2_eval` | Run Lua in the live game; `phase="update"` for anything that changes game state |
 | `dd2_types` | Methods or fields of a managed type |
+| `dd2_enum` | Every named value of an enum type (e.g. `app.Character.JobEnum`) |
+| `dd2_rsz` | Offline search of the type dump (alphaZomega's RE_RSZ `rszdd2.json`): every serializable type and its fields, no game needed; `action="download"` fetches it |
+| `dd2_weapons` | Weapon item table: WeaponID, vocation mask (`_Job` = 1 << JobEnum), stats; filter by job, WeaponID prefix or name |
+| `dd2_job` | Vocation state of the player or a pawn (job, exp per job, job bits); `set_job` changes it (jobs above 10 need `force`: they crash the game) |
 | `dd2_items` / `dd2_give_item` | Find item ids by name; give items (update phase) |
 | `dd2_recent_items` | Item log: newest inventory changes across player, pawns and stash (owner, subcategory, key-item, NEW) |
 | `dd2_gold` | Read gold and Rift Crystals; add or deduct gold |
 | `dd2_deploy` | Copy a mod project's `src/reframework/**` into the game |
-| `dd2_install_bridge` | Install the eval bridge (`dd2mcp/lua/dd2mcp_bridge.lua`) into `reframework/autorun` |
+| `dd2_install_bridge` | Install the eval bridge (`dd2mcp/lua/dd2mcp_bridge.lua`) into `reframework/autorun` and hot-reload it in the running game |
 | `dd2_log` | REFramework log for the current run, filtered |
+| `dd2_quit` | Close the game when testing ends; optionally list saves written since a time |
 | `dd2_launch` / `dd2_screenshot` | Start the game through Steam; capture the screen |
 | `dd2_take_control` / `dd2_hand_back` | Bring the game to the front and unpause it for testing; return the screen to the player's terminal (the game auto-pauses) |
 | `dd2_pause_state` / `dd2_key` | PauseManager state (5 = InGame pause menu); send a key press to the game |
-| `dd2_saves` | Snapshot, list and restore the whole save folder (restore needs the game closed) |
+| `dd2_saves` | Snapshot, list and restore the whole save folder (restore needs the game closed); `touched` lists saves written since a time and flags any outside the test units |
 | `dd2_scenario` | Test scenarios: shelve/unshelve single slots of the test character, or `load` one end to end (restart, unshelve, launch, guard, title menu, play-time + position check; ~50 s) |
 | `dd2_saveguard` | Arm/disarm the bridge save guard: refuses saves outside the test character and all autosaves while armed |
 | `dd2_vortex` | Vortex profiles: `status`, `profiles`, `dev` / `release` (switch to a mod project's profile from its `dd2mod.json`, create it, enable REFramework, deploy), `switch`, `play` (return to the previous profile) |
