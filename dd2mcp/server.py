@@ -203,6 +203,30 @@ def dd2_saveguard(action: str = "status", autosave: bool = False, units: list[in
     return game.format_result(game.eval_lua(code, timeout=10))
 
 
+@mcp.tool()
+def dd2_vortex(action: str = "status", project: str | None = None, profile: str | None = None) -> str:
+    """Vortex profiles for DD2 (starts Vortex if needed; refuses switches while DD2 runs).
+    action: 'status' (active game/profile, enabled mods); 'profiles' (DD2 profiles); 'dev' / 'release' (project =
+    mod project dir: switch to its dev or release-test profile from <project>/dd2mod.json, creating it if missing,
+    enable its required mods (REFramework) and deploy); 'switch' (profile = name); 'play' (return to the profile
+    that was active before the last switch, BG3 included)."""
+    from . import vortex
+    if action == "status":
+        return vortex.ensure_running() or vortex.status()
+    if action == "profiles":
+        return vortex.ensure_running() or vortex.profiles()
+    if action in ("dev", "release"):
+        if not project:
+            return f"{action} needs project (the mod project directory)"
+        cfg = vortex.project_cfg(project)
+        return vortex.switch(cfg[f"{action}_profile"], cfg["requires"], create=True)
+    if action == "switch":
+        return vortex.switch(profile) if profile else "switch needs profile"
+    if action == "play":
+        return vortex.back_to_play()
+    return f"unknown action {action!r}"
+
+
 def main():
     mcp.run(transport="stdio")
 

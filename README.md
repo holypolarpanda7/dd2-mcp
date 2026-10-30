@@ -19,6 +19,7 @@ MCP server for Dragon's Dogma 2 modding through REFramework. Started 2026-10-26 
 | `dd2_saves` | Snapshot, list and restore the whole save folder (restore needs the game closed) |
 | `dd2_scenario` | Test scenarios: shelve/unshelve single slots of the test character, or `load` one end to end (restart, unshelve, launch, guard, title menu, play-time + position check; ~50 s) |
 | `dd2_saveguard` | Arm/disarm the bridge save guard: refuses saves outside the test character and all autosaves while armed |
+| `dd2_vortex` | Vortex profiles: `status`, `profiles`, `dev` / `release` (switch to a mod project's profile from its `dd2mod.json`, create it, enable REFramework, deploy), `switch`, `play` (return to the previous profile) |
 
 Verified engine facts live in the Bastion plan doc. Key one: calls that change game state
 (instantiate, getItem, addVersion) only work from `re.on_pre_application_entry("UpdateBehavior")`.
@@ -36,3 +37,17 @@ game, so swaps happen with the game closed (Steam rescans at launch); deleting a
 not stick. `dd2_scenario load` points the character's "latest save" at the slot and confirms
 "Load from Last Saved Data"; calling `app.MainFlowManager.requestStartType` directly throws (and once
 crashed the game). The test character unit defaults to 0 (`DD2_TEST_UNITS`).
+
+## Vortex profiles
+
+Vortex runs both BG3 and DD2, so `dd2_vortex` always names the DD2 game when it switches. It talks to the
+Vortex bridge extension from bg3-data-mcp (`bg3-data-mcp-bridge`, token in its `bridge.json`) and starts
+Vortex if the bridge doesn't answer. Switches are refused while DD2 runs, because Vortex purges and
+redeploys `dinput8.dll`. A mod project names its profiles in `dd2mod.json`:
+
+```json
+{"vortex": {"dev_profile": "Bastion-Dev", "release_profile": "Bastion-Release", "requires": ["REFramework"]}}
+```
+
+Defaults are `<ProjectDir>-Dev`, `<ProjectDir>-Release` and `["REFramework"]`. Files copied by `dd2_deploy` are
+not Vortex-managed and survive profile switches.
