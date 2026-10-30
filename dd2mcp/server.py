@@ -293,6 +293,8 @@ def dd2_scenario(action: str = "list", name: str | None = None, slot: int | None
     action: 'list'; 'shelve' (name, slot, optional area/notes) archives a live slot; 'unshelve' (name) puts it
     back into its own slot (game must be closed); 'load' (name, restart) does it all: quits DD2 if restart=true,
     unshelves, launches, arms the save guard, passes the boot screens, starts the slot and verifies the play time.
+    'load_slot' (slot, restart) loads any live slot as it is, read-only: the guard allows saves only on the test
+    units, so e.g. the play-through can be checked without writing it.
     Slot types: 0 Auto, 1 Last Inn Rest (both auto-loadable), 2 unmoored-world restart, 3 Clear, 4 AddAuto.
     The game takes focus during boot; hand back with dd2_hand_back."""
     if action == "list":
@@ -304,6 +306,9 @@ def dd2_scenario(action: str = "list", name: str | None = None, slot: int | None
     if action == "load":
         from . import harness
         return harness.load(name, restart) if name else "load needs name"
+    if action == "load_slot":
+        from . import harness
+        return harness.load_slot(slot, restart) if slot is not None else "load_slot needs slot"
     return f"unknown action {action!r}"
 
 

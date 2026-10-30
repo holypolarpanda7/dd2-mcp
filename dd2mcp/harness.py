@@ -58,53 +58,10 @@ def load(name: str, restart: bool = False) -> str:
         _kill_game()
         log.append("quit DD2")
     log.append(saves.unshelve(name))
-    game.launch()
-    if not _wait(lambda: _eval('return sdk.get_managed_singleton("app.SaveDataManager") ~= nil'), 180, 2):
-        return "\n".join(log + ["bridge never answered after launch (dd2_log)"])
-    log.append("armed: " + game.format_result(game.eval_lua(
-        'return D.saveguard.arm({ units = { %s }, autosave = false })' % ", ".join(map(str, sorted(saves.TEST_UNITS))))))
-
-    # Boot screens: "START GAME" takes Enter, the autosave notice takes F. Check before every press so
-    # nothing reaches the title menu itself.
-    end = time.monotonic() + 120
-    presses = 0
-    while (ph := _flow_phase()) != PHASE_TITLE_MENU:
-        if time.monotonic() > end:
-            return "\n".join(log + [f"title menu not reached (phase {ph}) after {presses} key presses"])
-        control.win("focusgame")
-        control.key(ENTER if presses % 2 == 0 else F_KEY)
-        presses += 1
-        time.sleep(1.5)
-    # The title phase starts on the "START GAME" splash; Enter opens the menu (and does nothing once it is open).
-    control.win("focusgame")
-    control.key(ENTER)
-    time.sleep(2.5)
-    log.append(f"title menu after {presses + 1} key presses")
-
-    unit = _eval('return sdk.get_managed_singleton("app.GameSystem"):call("get_CachedSlotAuto") // 5')
-    if unit != slot // 5:
-        return "\n".join(log + [f"current character unit is {unit}, scenario is unit {slot // 5}: "
-                                "use Change Save Slot once, then retry"])
-    # Calling MainFlowManager.requestStartType ourselves throws (it needs title-UI state) and crashed the game
-    # once from the update phase; forcing Phase.RequestLoadData hangs at StartLoad. So point the unit's
-    # "latest save" at the slot type and confirm the title's default first item, Load from Last Saved Data.
-    latest = _eval('local g = sdk.get_managed_singleton("app.GameSystem") '
-                   f'D.call(g, "setLatestSaveSlotNum(System.Int32)", {slot % 5}) '
-                   f'return g:call("getLatestSaveSlotNum(System.Int32)", {slot // 5})')
-    if latest != slot % 5:
-        return "\n".join(log + [f"could not point the latest save at slot type {slot % 5} (got {latest})"])
-    control.win("focusgame")
-    control.key(F_KEY)
-    if not _wait(lambda: (_flow_phase() or 0) > PHASE_TITLE_MENU, 15, 0.5):
-        return "\n".join(log + ["title menu did not start a load after F (menu not on its first item?)"])
-    if not _wait(lambda: _flow_phase() == PHASE_IN_GAME and _eval("return D.player_pos() ~= nil"), 240, 2):
-        return "\n".join(log + [f"not in game after 240 s (phase {_flow_phase()})"])
-
-    state = _eval('local t = math.floor(sdk.get_managed_singleton("app.TimeManager"):call("get_WholePlayTime")) '
-                  'return { play_time_s = t, pos = D.player_pos(), guard = D.saveguard.log }')
+    state = _boot_and_start(slot, log)
+    if state is None:
+        return "\n".join(log)
     t = state["play_time_s"]
-    log.append(f"in game: play time {t // 3600}:{t % 3600 // 60:02d}:{t % 60:02d}, "
-               f"universal pos {[round(state['pos'][k], 1) for k in ('ux', 'uy', 'uz')]}")
     pos = [round(state["pos"][k], 1) for k in ("ux", "uy", "uz")]
     expected = meta.get("play_time_s")
     if expected is None:
@@ -119,6 +76,84 @@ def load(name: str, restart: bool = False) -> str:
                        "the slot did not load this scenario")
         else:
             log.append(f"verified: play time {t - expected:+d}s and {dist:.1f} m from the scenario fingerprint")
+    blocked = [e for e in state.get("guard") or [] if not e["allowed"]]
+    if blocked:
+        log.append(f"guard blocked {len(blocked)} save(s): " + ", ".join(f"slot {e['slot']}" for e in blocked))
+    return "\n".join(log)
+
+
+def _boot_and_start(slot: int, log: list) -> dict | None:
+    """Launch DD2, arm the save guard (test units only, no autosaves), pass the boot screens and start `slot`
+    from the title menu. Returns {play_time_s, pos, guard} once in game, or None (reason appended to log)."""
+    game.launch()
+    if not _wait(lambda: _eval('return sdk.get_managed_singleton("app.SaveDataManager") ~= nil'), 180, 2):
+        log.append("bridge never answered after launch (dd2_log)")
+        return None
+    log.append("armed: " + game.format_result(game.eval_lua(
+        'return D.saveguard.arm({ units = { %s }, autosave = false })' % ", ".join(map(str, sorted(saves.TEST_UNITS))))))
+
+    # Boot screens: "START GAME" takes Enter, the autosave notice takes F. Check before every press so
+    # nothing reaches the title menu itself.
+    end = time.monotonic() + 120
+    presses = 0
+    while (ph := _flow_phase()) != PHASE_TITLE_MENU:
+        if time.monotonic() > end:
+            log.append(f"title menu not reached (phase {ph}) after {presses} key presses")
+            return None
+        control.win("focusgame")
+        control.key(ENTER if presses % 2 == 0 else F_KEY)
+        presses += 1
+        time.sleep(1.5)
+    # The title phase starts on the "START GAME" splash; Enter opens the menu (and does nothing once it is open).
+    control.win("focusgame")
+    control.key(ENTER)
+    time.sleep(2.5)
+    log.append(f"title menu after {presses + 1} key presses")
+
+    unit = _eval('return sdk.get_managed_singleton("app.GameSystem"):call("get_CachedSlotAuto") // 5')
+    if unit != slot // 5:
+        log.append(f"current character unit is {unit}, wanted unit {slot // 5}: use Change Save Slot once, then retry")
+        return None
+    # Calling MainFlowManager.requestStartType ourselves throws (it needs title-UI state) and crashed the game
+    # once from the update phase; forcing Phase.RequestLoadData hangs at StartLoad. So point the unit's
+    # "latest save" at the slot type and confirm the title's default first item, Load from Last Saved Data.
+    latest = _eval('local g = sdk.get_managed_singleton("app.GameSystem") '
+                   f'D.call(g, "setLatestSaveSlotNum(System.Int32)", {slot % 5}) '
+                   f'return g:call("getLatestSaveSlotNum(System.Int32)", {slot // 5})')
+    if latest != slot % 5:
+        log.append(f"could not point the latest save at slot type {slot % 5} (got {latest})")
+        return None
+    control.win("focusgame")
+    control.key(F_KEY)
+    if not _wait(lambda: (_flow_phase() or 0) > PHASE_TITLE_MENU, 15, 0.5):
+        log.append("title menu did not start a load after F (menu not on its first item?)")
+        return None
+    if not _wait(lambda: _flow_phase() == PHASE_IN_GAME and _eval("return D.player_pos() ~= nil"), 240, 2):
+        log.append(f"not in game after 240 s (phase {_flow_phase()})")
+        return None
+
+    state = _eval('local t = math.floor(sdk.get_managed_singleton("app.TimeManager"):call("get_WholePlayTime")) '
+                  'return { play_time_s = t, pos = D.player_pos(), guard = D.saveguard.log }')
+    t = state["play_time_s"]
+    log.append(f"in game: play time {t // 3600}:{t % 3600 // 60:02d}:{t % 60:02d}, "
+               f"universal pos {[round(state['pos'][k], 1) for k in ('ux', 'uy', 'uz')]}")
+    return state
+
+
+def load_slot(slot: int, restart: bool = False) -> str:
+    """Load a slot exactly as it is on disk (no unshelve), with the save guard armed for the test units only,
+    so a slot outside them (the play-through) is read but can never be written. For checking a save."""
+    if slot % 5 not in START_TYPE:
+        return f"slot {slot} is a {saves.SLOT_TYPES[slot % 5]} slot; only Auto and Last Inn Rest load automatically"
+    log = []
+    if game.running():
+        if not restart:
+            return "refused: DD2 is running; pass restart=true to quit it (unsaved progress is lost)"
+        _kill_game()
+        log.append("quit DD2")
+    state = _boot_and_start(slot, log)
+    if state is None:
+        return "\n".join(log)
     blocked = [e for e in state.get("guard") or [] if not e["allowed"]]
     if blocked:
         log.append(f"guard blocked {len(blocked)} save(s): " + ", ".join(f"slot {e['slot']}" for e in blocked))
