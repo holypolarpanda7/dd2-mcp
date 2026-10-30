@@ -144,3 +144,34 @@ def back_to_play() -> str:
         return "ERROR: " + r["error"]
     STATE.unlink()
     return f"back on {prev['game']} / {prev['profile']!r}\n" + _summary(r)
+
+
+def install_release(project: str) -> str:
+    """Package the project (package.build), import the zip into Vortex (bridge /import), install it in the release
+    profile, enable it plus Fluffy, deploy. Vortex's DD2 extension re-zips it into Fluffy's Mods folder; enabling it
+    in Fluffy (fluffy.toggle) is what writes it to the game (verified 2026-10-29)."""
+    from . import package
+    log = [package.build(project)]
+    if "refused" in log[0] or "failed" in log[0]:
+        return "\n".join(log)
+    cfg = project_cfg(project)
+    pkg = package.config(pathlib.Path(project))
+    log.append(switch(cfg["release_profile"], cfg["requires"], create=True))
+    zip_path = pathlib.Path(project) / "build" / "release" / f"{pkg.get('file', pathlib.Path(project).name)}-{pkg['version']}.zip"
+    win = subprocess.run(["wslpath", "-w", str(zip_path)], capture_output=True, text=True).stdout.strip()
+    mod_id = zip_path.stem
+    st = call("GET", "/status", timeout=20)
+    if any(m.get("id") == mod_id for m in st.get("mods", [])):
+        call("POST", "/remove", {"mod": mod_id}, timeout=120)
+        log.append(f"removed the old {mod_id}")
+    imp = call("POST", "/import", {"paths": [win]}, timeout=60)
+    if not imp.get("imported"):
+        return "\n".join(log + [f"import failed (bridge 0.7.0+ needed): {imp}"])
+    inst = call("POST", "/install", {"download": imp["imported"][0]["id"]}, timeout=180)
+    mod = inst.get("installed")
+    fluffy_mod = next((m["id"] for m in inst.get("mods", []) if m["id"].lower().startswith("fluffy mod manager")), None)
+    call("POST", "/modstate", {"enable": [x for x in (mod, fluffy_mod) if x]}, timeout=60)
+    dep = call("POST", "/deploy", timeout=180)
+    log.append(f"installed {mod} in Vortex (+ {fluffy_mod or 'no Fluffy mod found'}), deployed: needToDeploy {dep.get('needToDeploy')}")
+    log.append("next: dd2_fluffy action='enable' writes it to the game")
+    return "\n".join(log)

@@ -1,6 +1,7 @@
 # Persistent window-control helper: one PowerShell process serves many requests over stdin, so the
 # ~0.45 s PowerShell start + Add-Type compile is paid once. One request per line, one reply per line:
-#   foreground | focus <hwnd> | focusgame | key <scan> [holdMs]
+#   foreground | focus <hwnd> | focusgame | focusproc <name> | key <scan> [holdMs] | rect <name> | mouse <x> <y> | click <x> <y>
+# (screen pixels). focusproc fronts a process's main window (e.g. Modmanager for Fluffy) and returns its handle.
 # The Alt tap lets SetForegroundWindow through Windows' focus-stealing rules.
 Add-Type @"
 using System; using System.Runtime.InteropServices;
@@ -10,6 +11,14 @@ public class W {
   [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+  [DllImport("user32.dll")] public static extern void mouse_event(uint flags, int dx, int dy, uint data, UIntPtr extra);
+  public static void Click(int x, int y) {
+    SetCursorPos(x, y); System.Threading.Thread.Sleep(40);
+    mouse_event(0x2, 0, 0, 0, UIntPtr.Zero); System.Threading.Thread.Sleep(50); mouse_event(0x4, 0, 0, 0, UIntPtr.Zero);
+  }
   public static bool Front(IntPtr h) {
     if (IsIconic(h)) ShowWindow(h, 9);
     keybd_event(0x12, 0, 0, UIntPtr.Zero); keybd_event(0x12, 0, 2, UIntPtr.Zero);
@@ -39,6 +48,16 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
         }
         $r = if ($game -eq [IntPtr]::Zero) { "no game window" } elseif ([W]::Front($game)) { "foreground $($game.ToInt64())" } else { "not foreground $($game.ToInt64())" }
       }
+      "focusproc" {
+        $p = Get-Process $a[1] -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+        $r = if (-not $p) { "no window for $($a[1])" } elseif ([W]::Front($p.MainWindowHandle)) { "foreground $($p.MainWindowHandle.ToInt64())" } else { "not foreground $($p.MainWindowHandle.ToInt64())" }
+      }
+      "rect" {
+        $p = Get-Process $a[1] -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+        if (-not $p) { $r = "no window for $($a[1])" } else { $rc = New-Object W+RECT; [void][W]::GetWindowRect($p.MainWindowHandle, [ref]$rc); $r = "$($rc.L) $($rc.T) $($rc.R) $($rc.B)" }
+      }
+      "mouse" { [void][W]::SetCursorPos([int]$a[1], [int]$a[2]); $r = "mouse $($a[1]) $($a[2])" }
+      "click" { [W]::Click([int]$a[1], [int]$a[2]); $r = "clicked $($a[1]) $($a[2])" }
       "key" { $hold = if ($a.Length -gt 2) { [int]$a[2] } else { 60 }; [W]::Key([byte][int]$a[1], $hold); $r = "sent scan $($a[1])" }
       default { $r = "unknown $($a[0])" }
     }

@@ -103,6 +103,48 @@ def dd2_pak(action: str = "find", path: str = "", out: str = "") -> str:
 
 
 @mcp.tool()
+def dd2_package(project: str, build: bool = True) -> str:
+    """Build a mod project's release zip (Fluffy format, also what Vortex installs): runs dd2mod.json package.build
+    (e.g. a pak builder), then zips modinfo.ini + build/*.pak + src/reframework/** minus package.exclude into
+    <project>/build/release/<file>-<version>.zip. Refuses packages with dev/test files or unreadable paks."""
+    from . import package
+    return package.build(project, build)
+
+
+@mcp.tool()
+def dd2_fluffy(action: str = "status", name: str = "", row: int = 0) -> str:
+    """Fluffy Mod Manager, for release-install tests. 'launch' / 'close'; 'enable' or 'disable' (name = part of the
+    mod's file name, e.g. 'Wizard'; row = its position in Fluffy's list, 0 = first) clicks its box and reports the
+    files now in the game; 'status' lists the files a mod has in the game (pak_mods + reframework scripts)."""
+    from . import fluffy
+    if action == "launch":
+        return fluffy.launch()
+    if action == "close":
+        return fluffy.close()
+    if action in ("enable", "disable"):
+        before = fluffy.installed_files(name)
+        if bool(before["pak_mods"] or before["scripts"]) == (action == "enable"):
+            return f"already {action}d: {before}"
+        msg = fluffy.launch()
+        if msg != "Fluffy open":
+            return msg
+        click = fluffy.toggle(row)
+        after = fluffy.installed_files(name)
+        ok = bool(after["pak_mods"] or after["scripts"]) == (action == "enable")
+        return f"{click}\n{'OK' if ok else 'NOT ' + action + 'd (wrong row? screenshot)'}: {after}"
+    return f"{name or '(no name)'} in the game: {fluffy.installed_files(name)}"
+
+
+@mcp.tool()
+def dd2_release(project: str, apply: bool = False) -> str:
+    """Publish a mod release: a DRAFT GitHub release v<version> with the release zip (dd2_package) attached.
+    Only from a clean, pushed main with a new tag; apply=False (default) just reports. Use only after in-game
+    testing passed and the user said release. Nexus uploads stay manual (no upload API)."""
+    from . import package
+    return package.release(project, apply)
+
+
+@mcp.tool()
 def dd2_crash(dump: str | None = None) -> str:
     """Analyze the last native crash (reframework_crash.dmp, or a given minidump path): exception, registers,
     disassembly around the fault and stack return addresses, mapped to managed methods through the method map
@@ -401,7 +443,8 @@ def dd2_vortex(action: str = "status", project: str | None = None, profile: str 
     action: 'status' (active game/profile, enabled mods); 'profiles' (DD2 profiles); 'dev' / 'release' (project =
     mod project dir: switch to its dev or release-test profile from <project>/dd2mod.json, creating it if missing,
     enable its required mods (REFramework) and deploy); 'switch' (profile = name); 'play' (return to the profile
-    that was active before the last switch, BG3 included)."""
+    that was active before the last switch, BG3 included); 'install' (project: build the release zip, import and
+    install it in the release profile with Fluffy enabled; then dd2_fluffy 'enable' puts it in the game)."""
     from . import vortex
     if action == "status":
         return vortex.ensure_running() or vortex.status()
@@ -416,6 +459,10 @@ def dd2_vortex(action: str = "status", project: str | None = None, profile: str 
         return vortex.switch(profile) if profile else "switch needs profile"
     if action == "play":
         return vortex.back_to_play()
+    if action == "install":
+        if not project:
+            return "install needs project"
+        return vortex.ensure_running() or vortex.install_release(project)
     return f"unknown action {action!r}"
 
 
