@@ -186,6 +186,25 @@ def dd2_disasm(target: str, length: int = 0x100) -> str:
 
 
 @mcp.tool()
+def dd2_xrefs(target: str, limit: int = 40) -> str:
+    """Who references a DD2.exe address: rel32 calls/jumps to it and rip-relative operands pointing at it (globals
+    such as the job-count int, static slots), each with its containing method. target is an RVA in hex or a method
+    regex as in dd2_disasm. Scans the code section from disk (~2 s, no game needed). Virtual/delegate calls
+    are invisible here: a method reached only through a vtable shows no callers."""
+    from . import crash
+    if re.fullmatch(r"(0x)?[0-9a-fA-F]+", target):
+        rva, head = int(target, 16), f"{target}"
+    else:
+        rows = crash.find_method(target, limit=2)
+        if not rows:
+            return f"no method matches /{target}/"
+        rva, head = rows[0][0], f"{rows[0][1]} @ {rows[0][0]:x}"
+    refs = crash.xrefs(rva, limit)
+    lines = [f"{a:x}  {kind:28s} {crash.method_at(a) or '?'}" for a, kind in refs]
+    return f"{head}: {len(refs)} reference(s){' (limit hit)' if len(refs) >= limit else ''}\n" + "\n".join(lines)
+
+
+@mcp.tool()
 def dd2_weapons(job: int | None = None, weapon_prefix: str | None = None, name: str | None = None) -> str:
     """Weapon item table: id, name, WeaponID name, vocation mask (_Job = 1 << JobEnum) and stats.
     Filter by job (JobEnum 1-10), WeaponID prefix (e.g. 'wp07') or name substring. No filter = counts per type."""
@@ -266,9 +285,11 @@ def dd2_gold(delta: int = 0) -> str:
 
 
 @mcp.tool()
-def dd2_deploy(project: str) -> str:
-    """Copy a mod project's src/reframework/** into the game's reframework folder and its build/*.pak into pak_mods."""
-    return game.deploy(project)
+def dd2_deploy(project: str, undeploy: bool = False) -> str:
+    """Copy a mod project's src/reframework/** into the game's reframework folder and its build/*.pak into pak_mods.
+    undeploy=True moves those files back out into SaveBackups/undeployed-* (do it after every test session, game
+    closed, so dev builds never run on the player's own saves)."""
+    return game.undeploy(project) if undeploy else game.deploy(project)
 
 
 @mcp.tool()
@@ -351,7 +372,8 @@ KEYS = {"esc": 0x01, "enter": 0x1C, "space": 0x39, "tab": 0x0F, "w": 0x11, "a": 
 @mcp.tool()
 def dd2_keys(sequence: str, delay: float = 0.35, screenshot: bool = False) -> str:
     """Send a key sequence in one call (focuses the game once). Tokens separated by spaces or commas: key names
-    (esc enter space tab w a s d f e q g x z c), 'name*N' to repeat, hex scan codes ('0x21'), 'wait:SECONDS'.
+    (esc enter space tab w a s d f e q g x z c), 'name*N' to repeat, 'name~SECONDS' to hold (cutscene 'Hold to Skip': 'f~2'), hex scan codes
+    ('0x21'), 'wait:SECONDS'.
     delay = pause after each key (menus drop presses that arrive faster than ~0.3 s). screenshot=True captures
     the screen at the end and returns its path. Example: 'esc wait:1 s*4 f wait:1 e'."""
     from . import control
@@ -367,14 +389,15 @@ def dd2_keys(sequence: str, delay: float = 0.35, screenshot: bool = False) -> st
             time.sleep(float(tok[5:]))
             sent.append(tok)
             continue
+        tok, _, hold = tok.partition("~")
         name, _, rep = tok.partition("*")
         scan = KEYS.get(name) if name in KEYS else int(name, 16) if name.startswith("0x") else None
         if scan is None:
             return f"unknown key {name!r} after sending: {' '.join(sent)}"
         for _ in range(int(rep or 1)):
-            control.key(scan)
+            control.key(scan, int(float(hold) * 1000) if hold else None)
             time.sleep(delay)
-        sent.append(tok)
+        sent.append(tok + (f"~{hold}" if hold else ""))
     out = "sent: " + " ".join(sent)
     if screenshot:
         out += "\nscreenshot: " + game.screenshot()
