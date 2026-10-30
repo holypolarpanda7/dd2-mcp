@@ -112,8 +112,14 @@ def _boot_and_start(slot: int, log: list) -> dict | None:
 
     unit = _eval('return sdk.get_managed_singleton("app.GameSystem"):call("get_CachedSlotAuto") // 5')
     if unit != slot // 5:
-        log.append(f"current character unit is {unit}, wanted unit {slot // 5}: use Change Save Slot once, then retry")
-        return None
+        # Same effect as the title's Change Save Slot (verified 2026-10-29: unit 1 -> 0, auto slot 5 -> 0).
+        unit = _eval('local g = sdk.get_managed_singleton("app.GameSystem") '
+                     f'D.call(g, "setUnitNumber(System.Int32)", {slot // 5}) return g:call("get_CachedSlotAuto") // 5',
+                     phase="update")
+        if unit != slot // 5:
+            log.append(f"could not switch the character unit to {slot // 5} (still {unit})")
+            return None
+        log.append(f"switched character unit to {unit}")
     # Calling MainFlowManager.requestStartType ourselves throws (it needs title-UI state) and crashed the game
     # once from the update phase; forcing Phase.RequestLoadData hangs at StartLoad. So point the unit's
     # "latest save" at the slot type and confirm the title's default first item, Load from Last Saved Data.
