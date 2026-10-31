@@ -366,13 +366,61 @@ def dd2_key(scan: int = 1, focus: bool = True) -> str:
 
 
 KEYS = {"esc": 0x01, "enter": 0x1C, "space": 0x39, "tab": 0x0F, "w": 0x11, "a": 0x1E, "s": 0x1F, "d": 0x20,
-        "f": 0x21, "e": 0x12, "q": 0x10, "g": 0x22, "x": 0x2D, "z": 0x2C, "c": 0x2E}
+        "f": 0x21, "e": 0x12, "q": 0x10, "g": 0x22, "x": 0x2D, "z": 0x2C, "c": 0x2E, "v": 0x2F, "r": 0x13,
+        "ctrl": 0x1D, "shift": 0x2A, "1": 0x02, "2": 0x03, "3": 0x04, "4": 0x05}
+# app.CharacterInput.Action values = bits of UserInput.ButtonOnFlags (2026-10-31)
+ACTIONS = {"attack": 1, "heavy": 2, "jump": 3, "dash": 4, "grab": 5, "interact": 6, "skill1": 7, "skill2": 8,
+           "skill3": 9, "skill4": 10, "shift": 14, "come": 17, "go": 18, "help": 19, "wait": 20, "cancel": 21,
+           "shoot": 23, "skill5": 27, "special": 29, "switchskill": 32}
+
+
+@mcp.tool()
+def dd2_action(actions: str = "", frames: int = 6, watch: float = 2.0, screenshot: bool = False) -> str:
+    """Press game input actions directly (below the key bindings; needs bridge 0.8.0) and trace the player's
+    behavior-tree nodes (layer 0 full body | layer 1 upper body) every 0.25 s for `watch` seconds.
+    actions: '+'-joined names (attack heavy jump dash grab interact skill1-4 shift come go help wait cancel shoot
+    skill5 special switchskill) or numbers (app.CharacterInput.Action); weapon skills need the modifier:
+    'shift+skill2'. frames = player-input updates to hold (~60/s). Empty actions = trace only.
+    Focuses the game and pages through a pausing popup (tutorials) first."""
+    from . import control
+    import time
+    r = control.win("focusgame")
+    if not r.startswith("foreground"):
+        return r
+    time.sleep(0.3)
+    for _ in range(10):
+        st = control.pause_state()
+        if not st or not st.get("paused"):
+            break
+        control.key(0x21)
+        time.sleep(0.6)
+    nodes = 'return table.concat(D.nodes(), " | ")'
+    out = [f"before: {game.format_result(game.eval_lua(nodes))}"]
+    if actions:
+        bits = []
+        for a in actions.lower().split("+"):
+            if a not in ACTIONS and not a.isdigit():
+                return f"unknown action {a!r}; known: {', '.join(ACTIONS)}"
+            bits.append(ACTIONS.get(a, int(a) if a.isdigit() else 0))
+        res = game.eval_lua(f"D.press({{{', '.join(map(str, bits))}}}, {frames}) return 'pressed'")
+        if not res.get("ok"):
+            return game.format_result(res) + "\n(bridge older than 0.8.0? dd2_install_bridge reload)"
+    t0, last = time.monotonic(), None
+    while time.monotonic() - t0 < watch:
+        cur = game.format_result(game.eval_lua(nodes))
+        if cur != last:
+            out.append(f"+{time.monotonic() - t0:.2f}s {cur}")
+            last = cur
+        time.sleep(0.25)
+    if screenshot:
+        out.append(game.screenshot())
+    return "\n".join(out)
 
 
 @mcp.tool()
 def dd2_keys(sequence: str, delay: float = 0.35, screenshot: bool = False) -> str:
     """Send a key sequence in one call (focuses the game once). Tokens separated by spaces or commas: key names
-    (esc enter space tab w a s d f e q g x z c), 'name*N' to repeat, 'name~SECONDS' to hold (cutscene 'Hold to Skip': 'f~2'), hex scan codes
+    (esc enter space tab w a s d f e q g x z c v r ctrl shift 1-4), 'name*N' to repeat, 'name~SECONDS' to hold (cutscene 'Hold to Skip': 'f~2'), hex scan codes
     ('0x21'), 'wait:SECONDS'.
     delay = pause after each key (menus drop presses that arrive faster than ~0.3 s). screenshot=True captures
     the screen at the end and returns its path. Example: 'esc wait:1 s*4 f wait:1 e'."""

@@ -11,7 +11,7 @@ local DATA = "dd2mcp/"
 local CMD, RESULT = DATA .. "in.lua", DATA .. "out.json"
 
 D = D or {}
-D.version = "0.7.0"
+D.version = "0.8.0"
 local next_poll, queued = 0, nil  -- the last command id lives on D (D.last_id) so a reload cannot re-run it
 
 function D.show(v)
@@ -286,6 +286,48 @@ if not D.quiet_hooked then
     skip_when_quiet("app.AISituationTaskState_StrayPawn_SalesMoveToPlayer", "onUpdate")
     skip_when_quiet("app.AISituationTaskState_StrayPawn_TalkPlayer", "onUpdate")
     D.quiet_hooked = true
+end
+
+-- Game input actions, injected below the key bindings: app.CharacterInput.Action n = bit n of
+-- UserInput.ButtonOnFlags (Skill1-4 = 7-10, Shift1 = 14 is the skill modifier, AttackS = 1, AttackL = 2, Jump = 3).
+-- D.press(bits, frames) holds them for `frames` player-input updates, then releases (2026-10-31: the keyboard
+-- binding of skills is a modifier chord, and 1-4 are pawn commands).
+D.input = D.input or {}
+if not D.input_hooked then
+    sdk.hook(sdk.find_type_definition("app.PlayerInputProcessor"):get_method("update"), function(args)
+        local p = D.input.press
+        if not p then return end
+        local i = sdk.to_managed_object(args[2]):call("get_Input")
+        if p.frames > 0 then
+            i:set_field("ButtonOnFlags", i:get_field("ButtonOnFlags") | p.mask)
+            if p.first then
+                i:set_field("ButtonTriggerFlags", i:get_field("ButtonTriggerFlags") | p.mask)
+                p.first = false
+            end
+            p.frames = p.frames - 1
+        else
+            i:set_field("ButtonReleaseFlags", i:get_field("ButtonReleaseFlags") | p.mask)
+            D.input.press = nil
+        end
+    end, function(r) return r end)
+    D.input_hooked = true
+end
+
+function D.press(bits, frames)
+    local mask = 0
+    for _, b in ipairs(bits) do mask = mask | (1 << b) end
+    D.input.press = { mask = mask, frames = frames or 6, first = true }
+end
+
+-- Current behavior-tree node per layer of a character's action FSM (layer 0 full body, 1 upper body).
+function D.nodes(chara)
+    local fsm = (chara or D.player()):call("get_ActionManager"):get_field("Fsm")
+    local r = {}
+    for l = 0, 1 do
+        local ok, n = pcall(fsm.call, fsm, "getCurrentNodeName(System.UInt32)", l)
+        r[#r + 1] = ok and n and tostring(n) or "-"
+    end
+    return r
 end
 
 -- Characters to inspect: "player" or "pawn1".."pawnN" (PawnManager.PawnCharacterList order: party pawns in the world).
