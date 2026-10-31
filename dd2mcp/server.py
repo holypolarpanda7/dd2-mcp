@@ -183,6 +183,151 @@ def dd2_bhvt(path: str, node: str = "", action: str = "", tree: bool = False, de
 
 
 @mcp.tool()
+def dd2_uvar(path: str = "", name: str = "", users: bool = True, scan: bool = False, limit: int = 40,
+             live: bool = False, set: str = "", who: str = "player", eval: str = "") -> str:
+    """User variables and their expression graphs: from a .uvar or the tree inside a .bhvt/.motfsm2 (pak path or
+    local file; player: natives/stm/appsystem/ch/ch000/motionfsm/ch000000.motfsm2.45). Variables are listed per
+    file (own, reference trees', embedded). name: regex on variable names -> the variable's type, value, flags,
+    expression as readable logic (e.g. '((SitMotion == 2000) || (SitMotion == 2700))') and, for trees, which
+    nodes' conditions use it, directly or through other variables' expressions. scan=True (needs name, no path):
+    search every FSM/uvar file in the game (~10 s). Operation numbers whose meaning is inferred, not confirmed,
+    carry a '?' (see uvar.OPERATIONS for the evidence).
+    eval='A=1,B=2.5': what-if values -> the result of every matched variable that has an expression (offline).
+    live=True: the running game's variables for `who` (player, pawn1..) with their current values (expressions
+    already evaluated by the engine); with a path, expression logic is shown next to them. set='Name=value'
+    writes a (writable) variable first, e.g. set='SitMotion=2700', then lists, so derived values show the effect."""
+    import json as _json
+    import re as _re
+    from . import bhvt, pak, uvar
+
+    def parse_value(t):
+        t = t.strip()
+        if t.lower() in ("true", "false"):
+            return t.lower() == "true"
+        try:
+            return int(t)
+        except ValueError:
+            try:
+                return float(t)
+            except ValueError:
+                return t
+
+    def load(p):
+        if pathlib.Path(p).exists():
+            return pathlib.Path(p).read_bytes()
+        f = pak.find(p)
+        return f[1] if f else None
+
+    def describe_var(v, tree=None):
+        val = "" if v.value is None else f" = {v.value}"
+        line = f"{v.name} : {v.type_name}{val}" + (" (const)" if v.flags & uvar.FLAG_CONST else "")
+        if v.expression:
+            txt = tree.expr_text(v) if tree else uvar.render(v.expression, lambda g: names.get(g, "var:" + g[:8]))
+            line += f"\n    expression: {txt}"
+        return line
+
+    if live or set:
+        out = []
+        if set:
+            k, _, v = set.partition("=")
+            r = game.eval_lua(f"return D.uvar_set({_json.dumps(who)}, {_json.dumps(k.strip())}, "
+                              f"{_json.dumps(parse_value(v))})", phase="update")
+            if not r.get("ok"):
+                return game.format_result(r) + "\n(bridge older than 0.9.0? dd2_install_bridge)"
+            out.append(f"set {k.strip()} = {parse_value(v)}: {(r.get('ret') or ['?'])[0]} variable(s) written")
+        r = game.eval_lua(f"return json.dump_string({{vars = D.uvars({_json.dumps(who)})}})")
+        if not r.get("ok"):
+            return game.format_result(r) + "\n(bridge older than 0.9.0? dd2_install_bridge)"
+        rows = _json.loads(r["ret"][0]).get("vars") or []
+        text = {}
+        if path and ".uvar" not in path:
+            data = load(path)
+            if data:
+                t = bhvt.Tree(data)
+                t.uvars
+                text = {v.name: t.expr_text(v) for v in t.variables.values() if v.expression}
+        rx = _re.compile(name, _re.I) if name else None
+        for v in rows:
+            if rx and not rx.search(v["name"]):
+                continue
+            flags = ", ".join(x for x, on in (("expression", v["expr"]), ("read-only", v["readOnly"]),
+                                              ("const", v["const"])) if on)
+            out.append(f"L{v['layer']} {v['name']} = {v.get('value')!r}" + (f"   [{flags}]" if flags else "")
+                       + (f"\n      {text[v['name']]}" if v["name"] in text else ""))
+        return "\n".join(out) or "no variables"
+    if scan:
+        if not name:
+            return "scan needs name"
+        rx, out = _re.compile(name, _re.I), []
+        for p in pak.search_list(r"\.(uvar|motfsm2|tmlfsm2)\.\d+$", 200000):
+            f = pak.find(p)
+            if not f:
+                continue
+            try:
+                tree = None if ".uvar." in p else bhvt.Tree(f[1])
+                roots = uvar.read_uvars(tree) if tree else [uvar.Uvar(f[1], 0, 0)]
+                allv = {}
+                for r in roots:
+                    for u in r.walk():
+                        for v in u.variables:
+                            allv[v.guid] = v
+                for r in roots:
+                    for u in r.walk():
+                        for v in u.variables:
+                            if rx.search(v.name):
+                                txt = ""
+                                if v.expression:
+                                    txt = "  " + uvar.render(v.expression, lambda g: allv[g].name if g in allv else "var:" + g[:8])
+                                out.append(f"{p.split('/')[-1]}: {v.name} [{v.type_name}]{txt}")
+            except Exception as e:  # noqa: BLE001 - a bad file must not stop the scan
+                out.append(f"{p}: {e}")
+            if len(out) >= limit:
+                out.append(f"... (limit {limit})")
+                break
+        return "\n".join(out) or "no match"
+    if not path:
+        return "path needed (or scan=True with name)"
+    data = load(path)
+    if data is None:
+        return f"{path}: not a local file and in no pak"
+    tree = None
+    if ".uvar" in path:
+        roots = [uvar.Uvar(data, 0, 0)]
+    else:
+        tree = bhvt.Tree(data)
+        roots = tree.uvars
+    rx = _re.compile(name, _re.I) if name else None
+    names = {v.guid: v.name for r in roots for u in r.walk() for v in u.variables}
+    out, n = [], 0
+    for ri, root in enumerate(roots):
+        for u in root.walk():
+            sel = [v for v in u.variables if not rx or rx.search(v.name)]
+            if not sel:
+                continue
+            out.append(f"-- {'variable set ' + str(ri) if tree else 'variables'}{' / ' + u.name if u.name else ''}"
+                       f" ({len(u.variables)} variables)")
+            for v in sel:
+                out.append("  " + describe_var(v, tree).replace("\n", "\n  "))
+                if eval and v.expression:
+                    vals = {a.split("=")[0].strip(): parse_value(a.split("=")[1]) for a in eval.split(",") if "=" in a}
+                    notes = []
+                    try:
+                        res = uvar.evaluate(v.expression, vals, lambda g: names.get(g), notes)
+                        out.append(f"    with {eval}: {res!r}" + (f"   ({'; '.join(sorted(set(notes)))})" if notes else ""))
+                    except KeyError as e:
+                        out.append(f"    with {eval}: needs a value for {e.args[0]}")
+                    except uvar.Unknown as e:
+                        out.append(f"    with {eval}: cannot evaluate ({e})")
+                if tree and rx and users:
+                    out += ["    " + x for x in tree.var_users(v.guid)]
+                n += 1
+                if n >= limit:
+                    out.append(f"... (limit {limit})")
+                    return "\n".join(out)
+    return "\n".join(out) or "no variables"
+
+
+@mcp.tool()
 def dd2_rszgen(names: list[str]) -> str:
     """Generate RSZ layouts from the running game for these type names (and their parents) into
     research/rsz/rsz_live_dd2.json; dd2_rsz_file uses them for types the community layouts lack. Type hashes are
