@@ -11,7 +11,7 @@ local DATA = "dd2mcp/"
 local CMD, RESULT = DATA .. "in.lua", DATA .. "out.json"
 
 D = D or {}
-D.version = "0.8.3"
+D.version = "0.9.0"
 local next_poll, queued = 0, nil  -- the last command id lives on D (D.last_id) so a reload cannot re-run it
 
 function D.show(v)
@@ -369,6 +369,73 @@ function D.nodes(chara)
         r[#r + 1] = ok and n and tostring(n) or "-"
     end
     return r
+end
+
+-- User variables of a character's behavior trees. Each motion FSM layer holds a via.userdata.UserVariablesHub
+-- (found by scanning the layer's fields: it sat at +0x78 on 2026-10-31). Variables with an expression evaluate
+-- through their getters, so reading them shows what the engine computes; set_* writes inputs (not write-protected).
+local UV_GETTERS = { [1] = "get_S32", [2] = "get_Bool", [3] = "get_S32", [4] = "get_U32", [5] = "get_S32", [6] = "get_U32",
+    [7] = "get_S32", [8] = "get_U32", [9] = "get_U64", [10] = "get_U64", [11] = "get_F32", [12] = "get_F32", [15] = "get_String" }
+local UV_SETTERS = { [1] = "set_S32", [2] = "set_Bool", [3] = "set_S32", [4] = "set_U32", [5] = "set_S32", [6] = "set_U32",
+    [7] = "set_S32", [8] = "set_U32", [9] = "set_U64", [10] = "set_U64", [11] = "set_F32", [12] = "set_F32", [15] = "set_String" }
+
+function D.uvar_hubs(chara)
+    local who = chara or D.player()
+    local fsm = who:call("get_ActionManager"):get_field("Fsm")
+    local hubs = {}
+    for li = 0, fsm:call("getLayerCount") - 1 do
+        local base = fsm:call("getLayer", li):get_address()
+        for off = 0x40, 0xA0, 8 do
+            local a = sdk.to_valuetype(base + off, "System.UInt64"):read_qword(0)
+            if a and a > 0x10000 and a < 0x7fffffffffff and sdk.is_managed_object(a) then
+                local o = sdk.to_managed_object(a)
+                if o:get_type_definition():get_full_name() == "via.userdata.UserVariablesHub" then
+                    hubs[#hubs + 1] = { layer = li, hub = o }
+                    break
+                end
+            end
+        end
+    end
+    return hubs
+end
+
+function D.uvars(who, name)
+    local out = {}
+    local ch = who and D.party()[who] or D.player()
+    for _, h in ipairs(D.uvar_hubs(ch)) do
+        for i = 0, h.hub:call("get_VariableSum") - 1 do
+            local v = h.hub:call("getVariableFromIndex", i)
+            local kind = v:call("get_TypeKind")
+            local g = UV_GETTERS[kind]
+            local value
+            if g then
+                local ok, val = pcall(v.call, v, g)
+                if ok then value = val end
+            end
+            local vn = v:call("get_Name")
+            if not name or vn == name then
+                out[#out + 1] = { layer = h.layer, name = vn, guid = tostring(v:call("get_Guid")), kind = kind,
+                    value = value, expr = v:call("get_Expression") == true, const = v:call("get_Const") == true,
+                    readOnly = v:call("get_ReadOnly") == true }
+            end
+        end
+    end
+    return out
+end
+
+function D.uvar_set(who, name, value)
+    local ch = who and D.party()[who] or D.player()
+    local n = 0
+    for _, h in ipairs(D.uvar_hubs(ch)) do
+        local v = h.hub:call("findVariable(System.String)", name)
+        if v then
+            local st = UV_SETTERS[v:call("get_TypeKind")]
+            if not st then return nil, "unsupported type" end
+            v:call(st, value)
+            n = n + 1
+        end
+    end
+    return n
 end
 
 -- Characters to inspect: "player" or "pawn1".."pawnN" (PawnManager.PawnCharacterList order: party pawns in the world).

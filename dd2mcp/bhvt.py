@@ -177,6 +177,109 @@ class Tree:
             out.append(lst[min(ex, len(lst) - 1)])
         return out
 
+    # -- expressions ----------------------------------------------------------------------------------------------
+    @property
+    def uvars(self):
+        """The tree's variable files (own, then reference trees'), each with its embedded files."""
+        if not hasattr(self, "_uvars"):
+            from . import uvar
+            self._uvars = uvar.read_uvars(self)
+            self.variables = {}
+            for root in self._uvars:
+                for u in root.walk():
+                    for v in u.variables:
+                        self.variables.setdefault(v.guid, v)
+        return self._uvars
+
+    def var_name(self, guid):
+        self.uvars
+        v = self.variables.get(guid)
+        return v.name if v else None
+
+    def expr_text(self, guid_or_var):
+        """A variable's expression graph as readable logic (or None when it has no expression)."""
+        from . import uvar
+        self.uvars
+        v = guid_or_var if hasattr(guid_or_var, "expression") else self.variables.get(guid_or_var)
+        if not v or not v.expression:
+            return None
+        return uvar.render(v.expression, lambda g: self.var_name(g) or f"var:{g[:8]}",
+                           lambda g: self._callback_text(g))
+
+    def _callback_text(self, guid):
+        for sec in ("exprConditions", "staticExprConditions"):
+            blk = self.block(sec)
+            for r in (blk.roots if blk else []):
+                name, f = blk.instances[r]
+                if f.get("v1_GUID") == guid:
+                    return describe_obj((blk, r), True, 120)
+        return None
+
+    def cond_text(self, ref, static_block=None):
+        """A BHVTId condition as one line; ConditionUserVariable expands to its expression logic."""
+        o = self.obj("conditions", "staticConditions", ref)
+        if not o:
+            return "-"
+        blk, i = o
+        name, f = blk.instances[i]
+        if name == "via.behaviortree.ConditionUserVariable":
+            self.uvars
+            want = "" if f.get("v2_Condition", True) else "NOT "
+            g1 = f.get("v1_GUID")
+            g3 = f.get("v3_Expression")
+            if g3 and g3 != "00000000-0000-0000-0000-000000000000":
+                v = self.variables.get(g3)
+                body = self.expr_text(v) if v else None
+                return f"{want}[{v.name if v else g3[:8]}] {body or '(plain variable)'}"
+            v = self.variables.get(g1)
+            return f"{want}{v.name if v else 'var:' + str(g1)[:8]}"
+        return describe_obj(o, True, 160)
+
+    def _cond_refs(self):
+        """Every (node, role, BHVTId) condition link in the tree."""
+        for n in self.nodes:
+            if not n["callerCond"].none:
+                yield n, "selector caller", n["callerCond"]
+            for c in n["children"]:
+                if not c["cond"].none:
+                    yield n, "child " + (self.by_id[c["id"]]["name"] if c["id"] in self.by_id else hex(c["id"])), c["cond"]
+            for st in n["states"]:
+                if not st["cond"].none:
+                    tg = self.by_id.get(st["target"])
+                    yield n, "state -> " + (tg["name"] if tg else hex(st["target"])), st["cond"]
+            for t in n["transitions"]:
+                if not t["cond"].none:
+                    yield n, "start", t["cond"]
+            for st in n["allStates"]:
+                if not st["cond"].none:
+                    tg = self.by_id.get(st["target"])
+                    yield n, "any-state -> " + (tg["name"] if tg else hex(st["target"])), st["cond"]
+
+    def var_users(self, guid):
+        """Where a variable matters: (a) conditions that name it (ConditionUserVariable v1_GUID / v3_Expression),
+        (b) variables whose expression references it, and (c) the conditions using those. -> list of text lines."""
+        self.uvars
+        direct = {}
+        for n, role, ref in self._cond_refs():
+            o = self.obj("conditions", "staticConditions", ref)
+            if o and o[0].instances[o[1]][0] == "via.behaviortree.ConditionUserVariable":
+                f = o[0].instances[o[1]][1]
+                for g in (f.get("v1_GUID"), f.get("v3_Expression")):
+                    if g:
+                        direct.setdefault(g, []).append(f"{n['full']}  [{role}]")
+        deps = {}
+        for g, v in self.variables.items():
+            if v.expression:
+                for nd in v.expression.nodes.values():
+                    if nd.params.get("VariableID"):
+                        deps.setdefault(nd.params["VariableID"], []).append(g)
+        out = [f"condition: {x}" for x in direct.get(guid, [])]
+        for dg in deps.get(guid, []):
+            dv = self.variables[dg]
+            out.append(f"expression of variable {dv.name}: {self.expr_text(dv)}")
+            out += [f"  condition via {dv.name}: {x}" for x in direct.get(dg, [])]
+        return out
+
     def find(self, pattern):
         import re
         rx = re.compile(pattern, re.I)
@@ -201,24 +304,24 @@ def describe(tree, node, detail=True):
         blk = tree.block("selectors")
         out.append(f"  selector: {blk.instances[blk.roots[node['selector']]][0] if blk else node['selector']}")
     if not node["callerCond"].none:
-        out.append(f"  selector caller condition: {describe_obj(tree.obj('conditions', 'staticConditions', node['callerCond']))}")
+        out.append(f"  selector caller condition: {tree.cond_text(node['callerCond'])}")
     for a, o in zip(node["actions"], tree.actions_of(node)):
         out.append(f"  action {a[0]:#x}: {describe_obj(o, detail)}")
     for c in node["children"]:
         ch = tree.by_id.get(c["id"])
-        cond = "" if c["cond"].none else "  if " + describe_obj(tree.obj("conditions", "staticConditions", c["cond"]), detail)
+        cond = "" if c["cond"].none else "  if " + tree.cond_text(c["cond"])
         out.append(f"  child: {ch['name'] if ch else hex(c['id'])}{cond}")
     for s in node["states"]:
         tg = tree.by_id.get(s["target"])
-        cond = "" if s["cond"].none else "  if " + describe_obj(tree.obj("conditions", "staticConditions", s["cond"]), detail)
+        cond = "" if s["cond"].none else "  if " + tree.cond_text(s["cond"])
         evs = [describe_obj(tree.obj("transitionEvents", "staticTransitionEvents", e), False) for e in s["events"]]
         out.append(f"  state -> {tg['full'] if tg else hex(s['target'])}{cond}{'  events ' + ', '.join(evs) if evs else ''}")
     for t in node["transitions"]:
         st = tree.by_id.get(t["start"])
-        cond = "" if t["cond"].none else "  if " + describe_obj(tree.obj("conditions", "staticConditions", t["cond"]), detail)
+        cond = "" if t["cond"].none else "  if " + tree.cond_text(t["cond"])
         out.append(f"  start: {st['name'] if st else hex(t['start'])}{cond}")
     for s in node["allStates"]:
         tg = tree.by_id.get(s["target"])
-        cond = "" if s["cond"].none else "  if " + describe_obj(tree.obj("conditions", "staticConditions", s["cond"]), detail)
+        cond = "" if s["cond"].none else "  if " + tree.cond_text(s["cond"])
         out.append(f"  any-state -> {tg['full'] if tg else hex(s['target'])}{cond}")
     return "\n".join(out)
