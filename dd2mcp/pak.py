@@ -162,11 +162,14 @@ class Pak:
 
 
 def game_paks() -> list[pathlib.Path]:
-    """Base pak then patches in load order (later ones override earlier ones)."""
+    """Base pak, then DLC paks (dlc/re_dlc_stm_*.pak: the Dark Arisen Expansion is 27 GB of them), then patches,
+    in load order (later ones override earlier ones). The DLC position is an assumption (2026-10-31)."""
     def order(p):
         s = p.name.split("patch_")
         return int(s[1].split(".")[0]) if len(s) > 1 else -1
-    return sorted(game.GAME.glob("re_chunk_000.pak*"), key=order)
+    chunks = sorted(game.GAME.glob("re_chunk_000.pak*"), key=order)
+    dlc = sorted((game.GAME / "dlc").glob("re_dlc_stm_*.pak")) if (game.GAME / "dlc").is_dir() else []
+    return chunks[:1] + dlc + chunks[1:]
 
 
 _OPEN: dict = {}
