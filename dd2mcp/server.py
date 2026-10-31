@@ -121,6 +121,68 @@ def dd2_rsz_file(path: str, find: str = "", show: str = "", depth: int = 2, limi
 
 
 @mcp.tool()
+def dd2_bhvt(path: str, node: str = "", action: str = "", tree: bool = False, depth: int = 3, detail: bool = True,
+             limit: int = 30) -> str:
+    """Read a behavior tree (.bhvt, or the tree inside a .motfsm2: player = natives/stm/appsystem/ch/ch000/motionfsm/
+    ch000000.motfsm2.45 (full body, layer 0) and ch000000_upperbody.motfsm2.45 (layer 1)) from the paks or a local
+    file. node: regex on full node paths (e.g. 'PsychoShoot$') -> each match with its selector, actions (decoded RSZ
+    objects), children with conditions, FSM states/start transitions with conditions and events. action: regex on
+    action type names -> nodes running them. tree=True: the matching node's subtree as an indented outline, `depth`
+    levels. No node/action: summary (node count, top-level states, condition/state counts)."""
+    import re as _re
+    from . import bhvt, pak
+    if pathlib.Path(path).exists():
+        data = pathlib.Path(path).read_bytes()
+    else:
+        found = pak.find(path)
+        if not found:
+            return f"{path}: not a local file and in no pak"
+        data = found[1]
+    try:
+        T = bhvt.Tree(data)
+    except ValueError as e:
+        return f"{path}: {e}"
+    if action:
+        rx = _re.compile(action, _re.I)
+        out = []
+        for n in T.nodes:
+            hits = [o for o in T.actions_of(n) if o and rx.search(o[0].instances[o[1]][0])]
+            if hits:
+                out.append(f"{n['full']}: " + ", ".join(bhvt.describe_obj(o, detail, 160) for o in hits))
+                if len(out) >= limit:
+                    out.append(f"... (limit {limit})")
+                    break
+        return "\n".join(out) or "no node runs a matching action"
+    if node:
+        matches = T.find(node)
+        if not matches:
+            return "no matching node"
+        if tree:
+            def outline(n, lvl, out):
+                acts = [o[0].instances[o[1]][0].split(".")[-1] for o in T.actions_of(n) if o]
+                out.append("  " * lvl + n["name"] + (f"  [{', '.join(acts)}]" if acts else ""))
+                if lvl < depth:
+                    for c in n["children"]:
+                        ch = T.by_id.get(c["id"])
+                        if ch:
+                            outline(ch, lvl + 1, out)
+                return out
+            out = []
+            for m in matches[:3]:
+                outline(m, 0, out)
+            return "\n".join(out)
+        out = [bhvt.describe(T, n, detail) for n in matches[:limit]]
+        if len(matches) > limit:
+            out.append(f"... {len(matches) - limit} more")
+        return "\n\n".join(out)
+    root = next((n for n in T.nodes if n["parent"] == 0xFFFFFFFF), T.nodes[0])
+    top = [T.by_id[c["id"]]["name"] for c in root["children"] if c["id"] in T.by_id]
+    nc = sum(1 for n in T.nodes for x in n["states"] + n["transitions"] + n["children"] + n["allStates"] if not x["cond"].none)
+    return (f"{len(T.nodes)} nodes, {sum(len(n['actions']) for n in T.nodes)} action refs, {nc} conditional links, "
+            f"{sum(len(n['states']) for n in T.nodes)} states\ntop level: {', '.join(top)}")
+
+
+@mcp.tool()
 def dd2_rszgen(names: list[str]) -> str:
     """Generate RSZ layouts from the running game for these type names (and their parents) into
     research/rsz/rsz_live_dd2.json; dd2_rsz_file uses them for types the community layouts lack. Type hashes are
