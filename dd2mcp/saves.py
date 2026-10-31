@@ -97,8 +97,9 @@ def scenario_list() -> str:
     return "\n".join(lines)
 
 
-def shelve(name: str, slot: int, area: str = "", notes: str = "") -> str:
-    """Archive the live file of one slot as a named scenario."""
+def shelve(name: str, slot: int, area: str = "", notes: str = "", deploy: list[str] | None = None) -> str:
+    """Archive the live file of one slot as a named scenario. deploy: mod project folders that load must
+    deploy before launching (saves made with a mod active may crash without it)."""
     if err := _check_test_slot(slot):
         return err
     live = game.saves_dir()
@@ -111,7 +112,7 @@ def shelve(name: str, slot: int, area: str = "", notes: str = "") -> str:
         return f"scenario {safe!r} exists; pick another name"
     dst.mkdir(parents=True)
     shutil.copy2(src, dst / "slot.bin")
-    meta = {"name": safe, "source_slot": slot, "area": area, "notes": notes,
+    meta = {"name": safe, "source_slot": slot, "area": area, "notes": notes, "deploy": deploy or [],
             "sha256": hashlib.sha256(src.read_bytes()).hexdigest(),
             "file_mtime": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(src.stat().st_mtime)),
             "shelved": time.strftime("%Y-%m-%dT%H:%M:%S")}

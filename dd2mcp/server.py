@@ -421,11 +421,13 @@ def dd2_saves(action: str = "list", name: str | None = None) -> str:
 
 @mcp.tool()
 def dd2_scenario(action: str = "list", name: str | None = None, slot: int | None = None,
-                 area: str = "", notes: str = "", restart: bool = False) -> str:
+                 area: str = "", notes: str = "", restart: bool = False, deploy: list[str] | None = None) -> str:
     """Test-harness save scenarios (single slots of the test character unit, default unit 0 = slots 0-4).
     action: 'list'; 'shelve' (name, slot, optional area/notes) archives a live slot; 'unshelve' (name) puts it
     back into its own slot (game must be closed); 'load' (name, restart) does it all: quits DD2 if restart=true,
     unshelves, launches, arms the save guard, passes the boot screens, starts the slot and verifies the play time.
+    'shelve' also takes deploy: mod project folders 'load' deploys (dd2_deploy) before launch, for saves that
+    need a mod (a save made as a modded vocation crashes without the mod).
     'load_slot' (slot, restart) loads any live slot as it is, read-only: the guard allows saves only on the test
     units, so e.g. the play-through can be checked without writing it.
     Slot types: 0 Auto, 1 Last Inn Rest (both auto-loadable), 2 unmoored-world restart, 3 Clear, 4 AddAuto.
@@ -433,7 +435,7 @@ def dd2_scenario(action: str = "list", name: str | None = None, slot: int | None
     if action == "list":
         return saves.scenario_list()
     if action == "shelve":
-        return saves.shelve(name, slot, area, notes) if name and slot is not None else "shelve needs name and slot"
+        return saves.shelve(name, slot, area, notes, deploy) if name and slot is not None else "shelve needs name and slot"
     if action == "unshelve":
         return saves.unshelve(name) if name else "unshelve needs name"
     if action == "load":
