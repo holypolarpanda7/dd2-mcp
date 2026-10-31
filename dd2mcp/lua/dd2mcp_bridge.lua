@@ -11,7 +11,7 @@ local DATA = "dd2mcp/"
 local CMD, RESULT = DATA .. "in.lua", DATA .. "out.json"
 
 D = D or {}
-D.version = "0.8.0"
+D.version = "0.8.2"
 local next_poll, queued = 0, nil  -- the last command id lives on D (D.last_id) so a reload cannot re-run it
 
 function D.show(v)
@@ -311,6 +311,45 @@ if not D.input_hooked then
         end
     end, function(r) return r end)
     D.input_hooked = true
+end
+
+-- Test god mode: the player takes no damage at all (HitController.damageProc skipped). HitController.IsInvincible
+-- did not stop bandits or an ogre killing the test character (2026-10-31). Off by default; resets on restart.
+D.godmode = D.godmode or { on = false }
+if not D.god_hooked then
+    sdk.hook(sdk.find_type_definition("app.HitController"):get_method("damageProc(app.DamageInfo)"), function(args)
+        if not D.godmode.on then return end
+        local p = D.player()
+        local hc = p and p:call("get_Hit")
+        if hc and sdk.to_int64(args[2]) == hc:get_address() then return sdk.PreHookResult.SKIP_ORIGINAL end
+    end, function(r) return r end)
+    D.god_hooked = true
+end
+
+-- A kill still got through damageProc alone (DieLoop at camp 049, 2026-10-31), so god mode also holds the game's
+-- own HitController flags every frame.
+function D.god(on)
+    D.godmode.on = on ~= false
+    if not D.god_frame then
+        re.on_frame(function()
+            if not D.godmode.on then return end
+            local p = D.player()
+            local hc = p and p:call("get_Hit")
+            if hc then
+                pcall(hc.call, hc, "set_IsNoDie", true)
+                pcall(hc.call, hc, "set_IsDamageZero", true)
+            end
+        end)
+        D.god_frame = true
+    end
+    return D.godmode.on
+end
+
+-- True while the player is dead (the "This tale has ended" screen: its first item loads the autosave).
+function D.dead()
+    local p = D.player()
+    local hc = p and p:call("get_Hit")
+    return hc ~= nil and hc:call("get_IsDie") == true
 end
 
 function D.press(bits, frames)

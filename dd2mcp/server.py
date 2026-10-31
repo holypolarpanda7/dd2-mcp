@@ -389,6 +389,9 @@ def dd2_action(actions: str = "", frames: int = 6, watch: float = 2.0, screensho
         return r
     time.sleep(0.3)
     for _ in range(10):
+        # F pages tutorials, but on the death screen it picks "Load from Autosave" (2026-10-31): never press there.
+        if game.eval_lua("return D.dead and D.dead() or false").get("ret") == ["true"]:
+            return "player is dead (game over screen): not pressing anything; reload the scenario"
         st = control.pause_state()
         if not st or not st.get("paused"):
             break
@@ -493,6 +496,14 @@ def dd2_scenario(action: str = "list", name: str | None = None, slot: int | None
         from . import harness
         return harness.load_slot(slot, restart) if slot is not None else "load_slot needs slot"
     return f"unknown action {action!r}"
+
+
+@mcp.tool()
+def dd2_god(on: bool = True) -> str:
+    """Test god mode for the player (bridge 0.8.2+): skips HitController.damageProc and holds IsNoDie/IsDamageZero
+    every frame. Knockback still happens. Resets on game restart. Use it for any combat test: enemies killed the
+    test character within seconds several times (2026-10-31)."""
+    return game.format_result(game.eval_lua(f"return D.god({'true' if on else 'false'})"))
 
 
 @mcp.tool()
