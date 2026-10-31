@@ -58,6 +58,10 @@ def load(name: str, restart: bool = False) -> str:
         _kill_game()
         log.append("quit DD2")
     log.append(saves.unshelve(name))
+    # Saves made with a mod active may not load without it (a Wizard save crashed in calcMaxWeightWithBuff,
+    # 2026-10-31), so the scenario names the projects to deploy before launch.
+    for project in meta.get("deploy") or []:
+        log.append(game.deploy(project))
     state = _boot_and_start(slot, log)
     if state is None:
         return "\n".join(log)
