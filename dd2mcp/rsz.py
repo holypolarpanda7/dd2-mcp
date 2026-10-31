@@ -21,7 +21,12 @@ def download() -> str:
     if r.returncode:
         return "download failed: " + r.stderr.strip()
     CACHE.unlink(missing_ok=True)
-    return f"downloaded {DUMP} ({DUMP.stat().st_size // 1_000_000} MB)"
+    from . import rszfile  # the newer layout template the RSZ decoder prefers (REE-Lib-Resources, MIT)
+    r2 = subprocess.run(["curl", "-sSfL", "-o", str(rszfile.TEMPLATE), rszfile.TEMPLATE_URL], capture_output=True,
+                        text=True, timeout=600)
+    extra = f", template {rszfile.TEMPLATE.stat().st_size // 1_000_000} MB" if not r2.returncode else \
+        ", template download failed: " + r2.stderr.strip()
+    return f"downloaded {DUMP} ({DUMP.stat().st_size // 1_000_000} MB){extra}"
 
 
 def _index() -> dict:

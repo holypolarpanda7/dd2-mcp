@@ -11,7 +11,7 @@ local DATA = "dd2mcp/"
 local CMD, RESULT = DATA .. "in.lua", DATA .. "out.json"
 
 D = D or {}
-D.version = "0.8.2"
+D.version = "0.8.3"
 local next_poll, queued = 0, nil  -- the last command id lives on D (D.last_id) so a reload cannot re-run it
 
 function D.show(v)
@@ -345,10 +345,12 @@ function D.god(on)
     return D.godmode.on
 end
 
--- True while the player is dead (the "This tale has ended" screen: its first item loads the autosave).
+-- True while the player is dead or absent: on the "This tale has ended" screen (its first item loads the
+-- autosave) there may be no player object at all (2026-10-31), and loading screens have none either.
 function D.dead()
     local p = D.player()
-    local hc = p and p:call("get_Hit")
+    if not p then return true end
+    local hc = p:call("get_Hit")
     return hc ~= nil and hc:call("get_IsDie") == true
 end
 

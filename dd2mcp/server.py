@@ -1,5 +1,6 @@
 """MCP server: Dragon's Dogma 2 modding through REFramework (live Lua eval, introspection, deploy, saves)."""
 import json
+import pathlib
 import re
 
 from mcp.server.mcpserver import MCPServer
@@ -69,6 +70,64 @@ def dd2_rsz(pattern: str = "", fields: bool = False, limit: int = 200, action: s
     if action == "download":
         return rsz.download()
     return rsz.search(pattern, fields, limit) if pattern else "search needs pattern"
+
+
+@mcp.tool()
+def dd2_rsz_file(path: str, find: str = "", show: str = "", depth: int = 2, limit: int = 40) -> str:
+    """Decode the RSZ blocks (serialized objects) of a game file: a pak path ('natives/stm/...motfsm2.45', newest
+    copy across base, DLC and patch paks) or a local file. No args beyond path: per-block summary (instances, top
+    types). find: regex on type names and field values -> 'block:index type fields' lines. show='block:index':
+    that instance and the objects it references, `depth` levels. Layouts come from the 2026 community template,
+    the 2024 dump and live-generated ones (dd2_rszgen), chosen per type by decode plausibility. Unknown types are
+    reported by hash: name them with dd2_rszgen."""
+    import collections
+    import re as _re
+    from . import pak, rszfile
+    if pathlib.Path(path).exists():
+        data = pathlib.Path(path).read_bytes()
+    else:
+        found = pak.find(path)
+        if not found:
+            return f"{path}: not a local file and in no pak"
+        data = found[1]
+    offs = rszfile.blocks(data)
+    blocks, out = [], []
+    for k, off in enumerate(offs):
+        try:
+            blocks.append(rszfile.Block(data, off, offs[k + 1] if k + 1 < len(offs) else None))
+        except ValueError as e:
+            blocks.append(None)
+            out.append(f"block {k} @{off:#x}: {e}")
+    if show:
+        b, i = (int(x) for x in show.split(":"))
+        return blocks[b].show(i, depth) if blocks[b] else "\n".join(out)
+    if find:
+        rx = _re.compile(find, _re.I)
+        n = 0
+        for k, b in enumerate(blocks):
+            for i, inst in enumerate(b.instances if b else []):
+                if inst and (rx.search(inst[0]) or rx.search(str(inst[1]))):
+                    out.append(f"{k}:{i} {inst[0]} {str(inst[1])[:300]}")
+                    n += 1
+                    if n >= limit:
+                        return "\n".join(out + [f"... (limit {limit})"])
+        return "\n".join(out) or "no match"
+    for k, b in enumerate(blocks):
+        if b and len(b.instances) > 1:
+            top = collections.Counter(x[0] for x in b.instances[1:]).most_common(5)
+            out.append(f"block {k} @{offs[k]:#x}: {len(b.instances) - 1} instances, {len(b.roots)} roots, "
+                       f"{b.retries} layout retries; top: " + ", ".join(f"{t} x{c}" for t, c in top))
+    return "\n".join(out) or "no RSZ data"
+
+
+@mcp.tool()
+def dd2_rszgen(names: list[str]) -> str:
+    """Generate RSZ layouts from the running game for these type names (and their parents) into
+    research/rsz/rsz_live_dd2.json; dd2_rsz_file uses them for types the community layouts lack. Type hashes are
+    murmur3(utf-8 name): to name an unknown hash, collect candidate names from live objects (e.g. walk the objects
+    holding the data) and compare with dd2mcp.murmur.type_hash. Needs the game running."""
+    from . import rszgen
+    return rszgen.generate(names)
 
 
 @mcp.tool()
@@ -391,7 +450,7 @@ def dd2_action(actions: str = "", frames: int = 6, watch: float = 2.0, screensho
     for _ in range(10):
         # F pages tutorials, but on the death screen it picks "Load from Autosave" (2026-10-31): never press there.
         if game.eval_lua("return D.dead and D.dead() or false").get("ret") == ["true"]:
-            return "player is dead (game over screen): not pressing anything; reload the scenario"
+            return "no living player (death screen, loading or title): not pressing anything; reload the scenario"
         st = control.pause_state()
         if not st or not st.get("paused"):
             break
