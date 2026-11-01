@@ -328,13 +328,15 @@ def dd2_uvar(path: str = "", name: str = "", users: bool = True, scan: bool = Fa
 
 
 @mcp.tool()
-def dd2_rszgen(names: list[str]) -> str:
+def dd2_rszgen(names: list[str], deep: bool = False) -> str:
     """Generate RSZ layouts from the running game for these type names (and their parents) into
     research/rsz/rsz_live_dd2.json; dd2_rsz_file uses them for types the community layouts lack. Type hashes are
     murmur3(utf-8 name): to name an unknown hash, collect candidate names from live objects (e.g. walk the objects
-    holding the data) and compare with dd2mcp.murmur.type_hash. Needs the game running."""
+    holding the data) and compare with dd2mcp.murmur.type_hash. deep=True also follows the classes the types'
+    serialized fields use (e.g. dd2_rszgen(['app.Job03Parameter'], deep=True) for the Mage's whole parameter file).
+    Needs the game running."""
     from . import rszgen
-    return rszgen.generate(names)
+    return rszgen.generate(names, deep)
 
 
 @mcp.tool()
