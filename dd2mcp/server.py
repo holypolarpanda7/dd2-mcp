@@ -407,19 +407,30 @@ def dd2_material(action: str = "scan", pattern: str = "", per_master: int = 3, p
 
 
 @mcp.tool()
-def dd2_efx(action: str = "info", path: str = "", filter: str = "", all: bool = False) -> str:
-    """Game effect (.efx) files via REE-Lib. 'extract': copy the .efx files whose path matches the regex `path` out of the paks into
-    research/efx (e.g. 'vfx/effects/character/ch00/'; empty = everything the community file list knows). 'info': entries and
-    attributes of one .efx (mesh/material paths shown; all=True lists every attribute). 'scan': find extracted .efx files that have
-    an attribute type containing `filter` (e.g. 'Mesh'). NOTE (2026-10-31): REE-Lib 0.8.1 cannot parse this game build's .efx files
-    ("Unknown DD2New EFX attribute type 1") - every one of the ~5000 known files fails, so efx authoring needs the format reverse-engineered."""
+def dd2_efx(action: str = "info", path: str = "", filter: str = "", all: bool = False, out: str = "") -> str:
+    """Game effect (.efx) files via REE-Lib, patched at read time for this game build (efx version 5965310 = "DD2New").
+    'extract': copy the .efx files whose path matches the regex `path` out of the paks into research/efx (empty = everything the
+    community file list knows, ~5000). 'info': entries and attributes of one .efx (mesh/material paths shown; all=True lists every
+    attribute). 'scan': find extracted .efx files that have an attribute type containing `filter` (e.g. 'Mesh'); survives files that
+    crash the parser. 'debug': header/section offsets of one file. 'normalize': write a copy of `path` to `out` without the
+    per-entry extra int32 (see below) so stock REE-Lib can read it.
+    FORMAT FINDINGS (2026-10-31, still incomplete): (1) every entry is preceded by one extra int32 REE-Lib 0.8.1 does not know (it is
+    NOT the attribute count; meaning unknown) - reetool strips it before parsing. (2) REE-Lib has no attribute-type-id table for
+    version DD2New; the ids in this build look like the original DD2 table (env REETOOL_EFX_IDS=DD2, default) for many types but the
+    mesh attribute is id 31 (the Pragmata value), so the table is a hybrid. (3) several attribute structs changed size (PtBehavior,
+    Spawn...). Net effect: only part of the ~5000 files parse; files with bones/actions are not walked yet. Mesh elements (id 31) store
+    their paths as [int byteSize][UTF-16 + NUL] (mesh, mirror mesh, material); those can be patched at byte level."""
     from . import ree
     if action == "extract":
         return ree.extract(path or r"\.efx\.", "efx")
     if action == "info":
         return ree.run("efx-info", path, *(["--all"] if all else []))
     if action == "scan":
-        return ree.run("efx-scan", path or ree.RESEARCH / "efx", filter)
+        return ree.scan_efx(path or ree.RESEARCH / "efx", filter)
+    if action == "debug":
+        return ree.run("efx-debug", path)
+    if action == "normalize":
+        return ree.run("efx-normalize", path, out)
     return f"unknown action {action!r}"
 
 

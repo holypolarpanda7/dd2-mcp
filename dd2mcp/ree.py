@@ -22,8 +22,8 @@ def winpath(p) -> str:
 
 def _env() -> dict:
     env = dict(os.environ, DOTNET_CLI_TELEMETRY_OPTOUT="1", DOTNET_NOLOGO="1",
-               REE_CE_DIR=winpath(TOOLS / "ContentEditor"), REE_GAME_DIR=GAME_WIN)
-    env["WSLENV"] = ":".join(filter(None, [env.get("WSLENV", ""), "DOTNET_CLI_TELEMETRY_OPTOUT", "DOTNET_NOLOGO", "REE_CE_DIR", "REE_GAME_DIR"]))
+               REE_CE_DIR=winpath(TOOLS / "ContentEditor"), REE_GAME_DIR=GAME_WIN, REETOOL_TRACE=os.environ.get("REETOOL_TRACE", "0"), REETOOL_EFX_IDS=os.environ.get("REETOOL_EFX_IDS", "DD2"))
+    env["WSLENV"] = ":".join(filter(None, [env.get("WSLENV", ""), "DOTNET_CLI_TELEMETRY_OPTOUT", "DOTNET_NOLOGO", "REE_CE_DIR", "REE_GAME_DIR", "REETOOL_TRACE", "REETOOL_EFX_IDS"]))
     return env
 
 
@@ -72,3 +72,40 @@ def extract(regex: str, kind: str, limit: int = 20000) -> str:
         dst.write_bytes(found[1])
         new += 1
     return f"{len(names)} matching paths, {new} newly written under {base}"
+
+
+def scan_efx(directory, filt: str = "") -> str:
+    """efx-scan over a folder, restarting after any file that kills the process (REE-Lib can stack-overflow on a malformed attribute)."""
+    err = ensure_built()
+    if err:
+        return err
+    start, crashed, matches, failures, scanned = 0, [], [], [], 0
+    while True:
+        cmd = [str(DOTNET), winpath(DLL), "efx-scan", winpath(directory), filt, "--from", str(start)]
+        r = subprocess.run(cmd, capture_output=True, text=True, env=_env(), timeout=3600)
+        last, block = None, []
+        for line in r.stdout.splitlines():
+            if line.startswith("#"):
+                if block and block[0].startswith("!"):
+                    failures.append(block[0])
+                elif block:
+                    matches.extend(block)
+                idx, _, path = line[1:].partition(" ")
+                last, block = (int(idx), path), []
+            elif line.startswith("scanned "):
+                scanned = max(scanned, int(line.split()[1]))
+            else:
+                block.append(line)
+        if block and block[0].startswith("!"):
+            failures.append(block[0])
+        elif block and not any(l.startswith("scanned") for l in block):
+            matches.extend(block)
+        if r.returncode == 0:
+            break
+        if last is None:
+            return "reetool crashed before scanning:\n" + r.stderr[:800]
+        crashed.append(last[1])
+        start = last[0] + 1
+    out = matches[:]
+    out.append(f"crashed the parser: {len(crashed)} files; parse failures: {len(failures)}; matches listed above for '{filt}'")
+    return "\n".join(out)

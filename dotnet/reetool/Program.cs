@@ -5,6 +5,8 @@
 //   mdf-info <file>                                               list the materials of an .mdf2
 //   efx-info <file> [--all]                                       entries and attributes of an .efx (mesh/material paths shown)
 //   mdf-scan <dir> [regex] [perMaster]                                       list .mdf2 materials (master shader + names) whose master matches the regex
+//   efx-debug <file>                                              step through the efx read (header, strings, sections) printing file offsets
+//   efx-normalize <in> <out>                                      strip the per-entry extra int32 this game build added, so REE-Lib can parse it
 //   efx-scan <dir> [filter]                                       find .efx files (recursively) with an attribute type containing <filter>
 // Env: REE_CE_DIR (Content Editor folder), REE_GAME_DIR (game install folder).
 using System.Collections;
@@ -25,8 +27,10 @@ try {
         "mesh-rt" => MeshRoundTrip(args),
         "mdf-info" => MdfInfo(args[1]),
         "mdf-scan" => MdfScan(args[1], args.Length > 2 ? args[2] : "", args.Length > 3 ? int.Parse(args[3]) : 3),
+        "efx-debug" => EfxDebug(args[1]),
+        "efx-normalize" => EfxNormalizeCmd(args[1], args[2]),
         "efx-info" => EfxInfo(args[1], args.Contains("--all")),
-        "efx-scan" => EfxScan(args[1], args.Length > 2 ? args[2] : ""),
+        "efx-scan" => EfxScan(args[1], args.Length > 2 ? args[2] : "", args.Contains("--from") ? int.Parse(args[Array.IndexOf(args, "--from") + 1]) : 0),
         _ => Fail("unknown command " + args[0]),
     };
 } catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
@@ -129,6 +133,7 @@ static string Str(object o, string field) {
 
 static Workspace Ws() {
     if (State.Ws != null) return State.Ws;
+    EfxFormat.RegisterVersionTables();
     var config = GameConfig.CreateFromRepository("dd2");
     config.GamePath = Environment.GetEnvironmentVariable("REE_GAME_DIR") ?? @"D:\SteamLibrary\steamapps\common\Dragons Dogma 2";
     return State.Ws = new Workspace(config);
@@ -136,7 +141,10 @@ static Workspace Ws() {
 
 static EfxFile LoadEfx(string path) {
     Ws(); // creating the workspace registers the game's efx attribute type tables
-    var f = new EfxFile(new FileHandler(path, false));
+    var raw = File.ReadAllBytes(path);
+    var data = EfxFormat.Normalize(raw, path);
+    var fh = new FileHandler(new MemoryStream(data), path);
+    var f = new EfxFile(fh);
     if (!f.Read()) throw new InvalidDataException("efx read failed: " + path);
     return f;
 }
@@ -155,9 +163,12 @@ static int EfxInfo(string path, bool all) {
     return 0;
 }
 
-static int EfxScan(string dir, string filter) {
+static int EfxScan(string dir, string filter, int from) {
     int files = 0, hits = 0;
-    foreach (var p in Directory.EnumerateFiles(dir, "*.efx.*", SearchOption.AllDirectories)) {
+    var all = Directory.EnumerateFiles(dir, "*.efx.*", SearchOption.AllDirectories).OrderBy(x => x, StringComparer.Ordinal).ToList();
+    for (int fi = from; fi < all.Count; fi++) {
+        var p = all[fi];
+        Console.WriteLine($"#{fi} {p}"); Console.Out.Flush(); // lets the caller resume after a process-killing file (stack overflow)
         files++;
         EfxFile f;
         try { f = LoadEfx(p); } catch (Exception ex) { Console.WriteLine($"! {p}: {ex.Message}"); continue; }
@@ -171,8 +182,121 @@ static int EfxScan(string dir, string filter) {
         }
         if (found.Count > 0) { hits++; Console.WriteLine($"{p}\n   " + string.Join("\n   ", found.Distinct().Take(12))); }
     }
-    Console.WriteLine($"scanned {files} efx, {hits} match '{filter}'");
+    Console.WriteLine($"scanned {files} efx (of {all.Count}), {hits} match '{filter}'");
+    return 0;
+}
+
+
+static int EfxDebug(string path) {
+    Ws();
+    var fh = new FileHandler(path, false);
+    Console.WriteLine($"file size={fh.FileSize()} FileVersion={fh.FileVersion}");
+    var f = new EfxFile(fh);
+    var h = f.Header;
+    fh.Seek(0);
+    h.Read(fh);
+    Console.WriteLine($"header version={h.Version} dim={h.dimensionType} entries={h.entryCount} strLen={h.stringTableLength} actions={h.actionCount} fieldParams={h.fieldParameterCount} exprParams={h.expressionParameterCount} groups={h.effectGroupsCount} groupsLen={h.effectGroupsLength} bones={h.boneCount} boneAttr={h.boneAttributeEntryCount} propBind={h.propBindingIndexCount}  pos after header={fh.Tell()}");
+    fh.Seek(0);
+    var raw = new byte[Math.Min(0x80, (int)fh.FileSize())];
+    fh.ReadBytes(raw);
+    Console.WriteLine("first bytes: " + BitConverter.ToString(raw).Replace("-", " "));
+    fh.Seek(0); h.Read(fh);
+    var st = new ReeLib.Efx.Strings(h);
+    st.Read(fh);
+    Console.WriteLine($"strings start={st.Start} pos after strings={fh.Tell()} -> seek {st.Start + h.stringTableLength}");
+    fh.Seek(st.Start + h.stringTableLength);
+    Console.WriteLine($"expression params begin at {fh.Tell()} ({h.expressionParameterCount} items)");
+    for (int i = 0; i < h.expressionParameterCount; i++) { var p = new ReeLib.Efx.EFXExpressionParameter(); p.name = st.ExpressionParameterNames[i]; p.Read(fh); Console.WriteLine($"  param {i} '{p.name}' ends at {fh.Tell()}"); }
+    Console.WriteLine($"bones begin at {fh.Tell()}");
+    { var keep = fh.Tell(); var l = new List<string>(); for (int i = 0; i < 24; i++) { l.Add(fh.Read<short>().ToString()); } fh.Seek(keep);
+      Console.WriteLine("shorts from bones start: " + string.Join(" ", l)); }
+    if (h.boneCount > 0) Console.WriteLine("(bones present: skipping not implemented)");
+    for (int i = 0; i < h.boneAttributeEntryCount; i++) fh.Read<short>();
+    Console.WriteLine($"actions begin at {fh.Tell()} (count {h.actionCount})");
+    var at = fh.Tell();
+    var ints = new List<string>();
+    for (int i = 0; i < 40; i++) { if (fh.Tell() + 4 > fh.FileSize()) break; ints.Add(fh.Read<int>().ToString()); }
+    Console.WriteLine($"next 40 int32 from {at}: " + string.Join(" ", ints));
+    return 0;
+}
+
+static int EfxNormalizeCmd(string input, string output) {
+    Ws();
+    var raw = File.ReadAllBytes(input);
+    var data = EfxFormat.Normalize(raw, input);
+    File.WriteAllBytes(output, data);
+    Console.WriteLine($"{raw.Length} -> {data.Length} bytes (removed {raw.Length - data.Length})");
     return 0;
 }
 
 static class State { public static Workspace Ws; }
+
+// This game build (DD2 title update 3.2 / Expansion era) writes one extra int32 in front of every efx entry (equal to the entry's
+// attribute count). REE-Lib 0.8.1 does not know it, so every entry after the first is misread. Attributes carry their own sizes
+// (typeId, size, seqNum, payload), so entries can be walked without knowing attribute types.
+static class EfxFormat {
+    // REE-Lib has no attribute-type id table for EfxVersion.DD2New (the version this game build writes). Hypothesis under test: it uses
+    // the ids of the neighbouring version (Pragmata); inject them into the remapper's private lookup before anything is read.
+    public static void RegisterVersionTables() {
+        var rem = typeof(ReeLib.Efx.EfxAttributeTypeRemapper);
+        var f = rem.GetField("AttributeTypeIDs", BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Static);
+        var ids = f.GetValue(null) as System.Collections.IDictionary;
+        int added = 0;
+        foreach (System.Collections.DictionaryEntry kv in ids) {
+            var perVersion = (Dictionary<ReeLib.Efx.EfxVersion, int>)kv.Value;
+            var srcName = Environment.GetEnvironmentVariable("REETOOL_EFX_IDS") ?? "DD2";
+            var source = Enum.Parse<ReeLib.Efx.EfxVersion>(srcName);
+            if (perVersion.TryGetValue(source, out var id)) { perVersion[ReeLib.Efx.EfxVersion.DD2New] = id; added++; }
+        }
+        if (Environment.GetEnvironmentVariable("REETOOL_TRACE") == "1") Console.WriteLine($"registered {added} DD2New attribute ids");
+    }
+
+    public static byte[] Normalize(byte[] raw, string path) {
+        var fh = new FileHandler(new MemoryStream(raw), path);
+        var f = new EfxFile(fh);
+        long entriesStart = EntriesStart(f, fh);
+        var o = new MemoryStream();
+        o.Write(raw, 0, (int)entriesStart);
+        int pos = (int)entriesStart;
+        int entryCount = f.Header.entryCount;
+        for (int e = 0; e < entryCount; e++) {
+            int extra = BitConverter.ToInt32(raw, pos);
+            int attrCount = BitConverter.ToInt32(raw, pos + 16);
+            if (Environment.GetEnvironmentVariable("REETOOL_TRACE") == "1") {
+                var types = new List<string>(); int q = pos + 20;
+                for (int a2 = 0; a2 < attrCount; a2++) { types.Add(BitConverter.ToInt32(raw, q) + ":" + BitConverter.ToInt32(raw, q + 8) + "/" + BitConverter.ToInt32(raw, q + 4)); q += 8 + BitConverter.ToInt32(raw, q + 4); }
+                Console.WriteLine($"entry {e}: extra={extra} index={BitConverter.ToInt32(raw, pos + 4)} assign={BitConverter.ToInt32(raw, pos + 12)} attrs={attrCount} types=[{string.Join(",", types)}]");
+            }
+            o.Write(raw, pos + 4, 16); // index, nameHash, entryAssignment, attributeCount
+            pos += 20;
+            for (int a = 0; a < attrCount; a++) {
+                int size = BitConverter.ToInt32(raw, pos + 4);
+                int len = 8 + size; // typeId + size + (seqNum + payload counted by size)
+                o.Write(raw, pos, len);
+                pos += len;
+            }
+        }
+        o.Write(raw, pos, raw.Length - pos);
+        return o.ToArray();
+    }
+
+    // Replicates EfxFile.DoRead up to the first entry (header, strings, expression params, bones, relations, actions, field params).
+    static long EntriesStart(EfxFile f, FileHandler fh) {
+        var h = f.Header;
+        fh.Seek(0); h.Read(fh);
+        var st = new ReeLib.Efx.Strings(h); st.Read(fh);
+        fh.Seek(st.Start + h.stringTableLength);
+        for (int i = 0; i < h.expressionParameterCount; i++) { var p = new ReeLib.Efx.EFXExpressionParameter(); p.name = st.ExpressionParameterNames[i]; p.Read(fh); }
+        if (h.boneCount > 0) throw new NotSupportedException("efx with bones: entry start walk not implemented");
+        for (int i = 0; i < h.boneAttributeEntryCount; i++) fh.Read<short>();
+        if (h.actionCount > 0 || h.fieldParameterCount > 0) {
+            // actions / field parameters: let REE-Lib parse them through its private reader
+            typeof(EfxFile).GetField("Strings")?.SetValue(f, st);
+            var ra = typeof(EfxFile).GetMethod("ReadActions", BindingFlags.NonPublic | BindingFlags.Instance);
+            if (ra == null) throw new MissingMethodException("EfxFile.ReadActions");
+            if (h.Version > ReeLib.Efx.EfxVersion.RE7) ra.Invoke(f, new object[] { fh });
+            for (int i = 0; i < h.fieldParameterCount; i++) { var p = new ReeLib.Efx.EFXFieldParameterValue { Version = h.Version, name = st.FieldParameterNames[i] }; p.Read(fh); }
+        }
+        return fh.Tell();
+    }
+}
