@@ -840,6 +840,95 @@ def dd2_god(on: bool = True) -> str:
     return game.format_result(game.eval_lua(f"return D.god({'true' if on else 'false'})"))
 
 
+_ENEMIES_LUA = r"""
+local pl = sdk.get_managed_singleton('app.CharacterManager'):get_ManualPlayerHuman():get_GameObject():get_Transform():get_Position()
+local l = sdk.get_managed_singleton('app.EnemyManager'):get_field('_EnemyList')
+local rows = {}
+for i = 0, l:call('get_Count') - 1 do
+  local go = l:call('get_Item', i):get_GameObject()
+  local ok, p = pcall(function() return go:get_Transform():get_Position() end)
+  if ok and p then rows[#rows+1] = {go:get_Name(), math.sqrt((p.x-pl.x)^2 + (p.y-pl.y)^2 + (p.z-pl.z)^2)} end
+end
+table.sort(rows, function(a, b) return a[2] < b[2] end)
+local out = {}
+for i = 1, math.min(#rows, %d) do out[#out+1] = string.format('%%s d=%%.0f', rows[i][1], rows[i][2]) end
+return #rows .. ' enemies' .. (#out > 0 and ': ' or '') .. table.concat(out, ', ')
+"""
+
+_KEYLOC_LUA = r"""
+local td = sdk.find_type_definition('app.AIKeyLocation')
+local out = {}
+for _, f in ipairs(td:get_fields()) do
+  if f:is_static() then out[#out+1] = f:get_data(nil) .. '=' .. f:get_name() end
+end
+return table.concat(out, ' ')
+"""
+
+
+@mcp.tool()
+def dd2_warp(action: str = "list", target: str = "", count: int = 8, wait: float = 7.0) -> str:
+    """Warp the player to a game AI key location (camps, towns, dungeon entrances) and look at the enemies there.
+    'list': AIKeyLocation names matching the lua pattern `target` (e.g. 'Camp_0%d%d'). 'warp': go to `target` (a name like
+    Gimmick_Camp_049 or a numeric id); the player appears after a few seconds and a 'Pawn Commands' tutorial popup may
+    pause the game (dd2_keys 'f*5'). 'enemies': the `count` nearest enemies of app.EnemyManager with distances (names look like
+    ch221001_00_3: ch221 = ghost, ch252 = rock golem; list in docs). 'survey': warp to every location matching `target`,
+    wait `wait` s each, report the nearest enemies (locations that don't move the player are reported as 'no warp') - use it to find a test spot with small enemies (note: set dd2_god first and
+    expect long runtimes; one location per ~`wait` seconds). Positions of characters cannot be set by transform
+    (controllers override it), warping is the only way to move the player."""
+    import time
+    if action in ("warp", "survey"):
+        from . import control
+        control.take_control(True)  # the game pauses while unfocused, and a paused game never runs the warp
+    if action == "list":
+        pat = target or "."
+        r = game.format_result(game.eval_lua(_KEYLOC_LUA))
+        import re as _re
+        items = [x for x in r.replace("=> ", "").split(" ") if _re.search(pat.replace("%d", r"\d"), x)]
+        return " ".join(items)[:6000] or "no match"
+    if action == "enemies":
+        return game.format_result(game.eval_lua(_ENEMIES_LUA % count))
+
+    import re as _re
+    table = {}
+    for item in game.format_result(game.eval_lua(_KEYLOC_LUA)).replace("=> ", "").split(" "):
+        if "=" in item:
+            k, _, v = item.partition("=")
+            table[v] = k
+
+    def warp_to(t: str) -> str:
+        ident = t if t.isdigit() else table.get(t)
+        if ident is None:
+            return f"unknown location {t!r} (dd2_warp list)"
+        code = ("local crime = sdk.get_managed_singleton('app.NPCManager'):get_field('CrimeManager')\n"
+                f"crime:call('warpPlayerToAIKeyLocation(app.AIKeyLocation, System.Int32, System.Action)', {ident}, 0, nil)\nreturn 'warping to {t} ({ident})'")
+        return game.format_result(game.eval_lua(code, phase="update"))
+
+    if action == "warp":
+        return warp_to(target)
+    if action == "survey":
+        names = [n for n in table if _re.search((target or ".").replace("%d", r"\d"), n)]
+        lines = []
+
+        def where() -> str:
+            return game.format_result(game.eval_lua("local p = D.player_pos(); return string.format('%.0f %.0f %.0f', p.ux, p.uy, p.uz)"))
+
+        control.take_control(True)
+        control.key(0x21); time.sleep(0.6); control.key(0x21); time.sleep(0.6)  # clear a pending tutorial popup
+        for n in names:
+            control.take_control(True)
+            before = where()
+            warp_to(n)
+            time.sleep(wait)
+            control.key(0x21)  # 'f': pages the "Pawn Commands" tutorial that pops up after warps
+            time.sleep(0.5)
+            if where() == before:
+                lines.append(f"{n}: no warp (not a valid target here)")
+            else:
+                lines.append(f"{n}: " + game.format_result(game.eval_lua(_ENEMIES_LUA % count)))
+        return "\n".join(lines) or "no locations match"
+    return f"unknown action {action!r}"
+
+
 @mcp.tool()
 def dd2_saveguard(action: str = "status", autosave: bool = False, units: list[int] | None = None) -> str:
     """Bridge save guard. 'arm' refuses every save outside the test units (default [0]) and, unless
