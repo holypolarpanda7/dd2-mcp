@@ -64,3 +64,11 @@ redeploys `dinput8.dll`. A mod project names its profiles in `dd2mod.json`:
 
 Defaults are `<ProjectDir>-Dev`, `<ProjectDir>-Release` and `["REFramework"]`. Files copied by `dd2_deploy` are
 not Vortex-managed and survive profile switches.
+
+## REE-Lib helper (meshes, materials, effects)
+
+`dd2_mesh`, `dd2_material` and `dd2_efx` run `dotnet/reetool`, a small .NET 10 program built on demand (`dd2mcp/ree.py`) with the
+private SDK in `<dd2-modding>/Tools/dotnet` against the Content Editor DLLs in `Tools/ContentEditor` (override with `DD2_TOOLS`).
+`dd2_mesh import` turns a glTF into a game `.mesh` (the Content Editor importer plus the two fixes the game needs, see the tool
+docstring); `dd2_material` extracts and scans the game's `.mdf2` files by master shader; `dd2_efx` inspects `.efx` files (REE-Lib
+0.8.1 cannot yet parse this build's efx).

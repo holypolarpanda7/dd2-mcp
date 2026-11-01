@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Headless REE-Lib / Content Editor helper for dd2-mcp (mesh import, mesh/mdf/efx inspection). Built on demand by dd2mcp/ree.py
+       with the private .NET SDK in <dd2-modding>/Tools/dotnet against the Content Editor DLLs in Tools/ContentEditor. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable><ImplicitUsings>enable</ImplicitUsings><AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <CEDir Condition="'$(CEDir)'==''">..\..\..\Tools\ContentEditor</CEDir>
+    <NoWarn>CA1416</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="REE-Lib"><HintPath>$(CEDir)\REE-Lib.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="ContentEditor.App"><HintPath>$(CEDir)\ContentEditor.App.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="ContentEditor.Core"><HintPath>$(CEDir)\ContentEditor.Core.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="AssimpNetter"><HintPath>$(CEDir)\AssimpNetter.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+</Project>
