@@ -371,6 +371,59 @@ def dd2_pak(action: str = "find", path: str = "", out: str = "") -> str:
 
 
 @mcp.tool()
+def dd2_mesh(action: str = "info", src: str = "", out: str = "", colors: bool = False) -> str:
+    """Game .mesh files via the headless REE-Lib helper (dotnet/reetool, built on demand with the private .NET SDK in Tools/).
+    'import': glTF/GLB -> DD2 .mesh (src=.glb, out=.mesh) using the Content Editor importer plus the fixes the game needs
+    (non-null streaming buffers; colors=True adds an opaque white vertex-color stream, only for VFX-style meshes, NOT for weapon-layout
+    meshes). 'info': dump a .mesh header/buffers (compare a custom mesh against a game one: element count, flags, bufferCount).
+    'roundtrip': read + rewrite a .mesh (is the writer lossless?). 'materials': list the materials of an .mdf2 (src).
+    A mesh only LINKS to a game material (mesh:get_MaterialLinked()) when its material names match the .mdf2's, in order."""
+    from . import ree
+    if action == "import":
+        return ree.run("mesh-import", src, out, *(["--colors"] if colors else []))
+    if action == "info":
+        return ree.run("mesh-info", src)
+    if action == "roundtrip":
+        return ree.run("mesh-rt", src, out)
+    if action == "materials":
+        return ree.run("mdf-info", src)
+    return f"unknown action {action!r}"
+
+
+@mcp.tool()
+def dd2_material(action: str = "scan", pattern: str = "", per_master: int = 3, path: str = "") -> str:
+    """Game .mdf2 materials. 'extract': copy the .mdf2 files whose path matches the regex `pattern` out of the paks into
+    research/mdf (do this once with pattern '\\.mdf2\\.51$' for all ~13k). 'scan': list the master shaders of the extracted
+    materials whose master matches the regex `pattern` (e.g. 'Illusion|Transparent'), with `per_master` example files each (the
+    file shows its material count). 'info': list the materials of one extracted .mdf2 (path)."""
+    from . import ree
+    if action == "extract":
+        return ree.extract(pattern or r"\.mdf2\.51$", "mdf")
+    if action == "scan":
+        return ree.run("mdf-scan", ree.RESEARCH / "mdf", pattern, per_master)
+    if action == "info":
+        return ree.run("mdf-info", path)
+    return f"unknown action {action!r}"
+
+
+@mcp.tool()
+def dd2_efx(action: str = "info", path: str = "", filter: str = "", all: bool = False) -> str:
+    """Game effect (.efx) files via REE-Lib. 'extract': copy the .efx files whose path matches the regex `path` out of the paks into
+    research/efx (e.g. 'vfx/effects/character/ch00/'; empty = everything the community file list knows). 'info': entries and
+    attributes of one .efx (mesh/material paths shown; all=True lists every attribute). 'scan': find extracted .efx files that have
+    an attribute type containing `filter` (e.g. 'Mesh'). NOTE (2026-10-31): REE-Lib 0.8.1 cannot parse this game build's .efx files
+    ("Unknown DD2New EFX attribute type 1") - every one of the ~5000 known files fails, so efx authoring needs the format reverse-engineered."""
+    from . import ree
+    if action == "extract":
+        return ree.extract(path or r"\.efx\.", "efx")
+    if action == "info":
+        return ree.run("efx-info", path, *(["--all"] if all else []))
+    if action == "scan":
+        return ree.run("efx-scan", path or ree.RESEARCH / "efx", filter)
+    return f"unknown action {action!r}"
+
+
+@mcp.tool()
 def dd2_package(project: str, build: bool = True) -> str:
     """Build a mod project's release zip (Fluffy format, also what Vortex installs): runs dd2mod.json package.build
     (e.g. a pak builder), then zips modinfo.ini + build/*.pak + src/reframework/** minus package.exclude into

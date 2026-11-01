@@ -1,3 +1,5 @@
 __pycache__/
 *.pyc
 .venv/
+dotnet/reetool/bin/
+dotnet/reetool/obj/
