@@ -24,6 +24,7 @@ _ENUM = {1: ("U8", 1, 1), 2: ("U16", 2, 2), 4: ("S32", 4, 4), 8: ("S64", 8, 8)}
 
 LUA_EXPORT = r'''
 local out, seen = {}, {}
+local deep = DEEP
 local function vsize(t) local ok, s = pcall(function() return t:get_valuetype_size() end) return ok and s or nil end
 local function isenum(t) local ok, r = pcall(function() return t:is_a("System.Enum") end) return ok and r or false end
 local function isud(t) local ok, r = pcall(function() return t:is_a("via.UserData") end) return ok and r or false end
@@ -51,6 +52,19 @@ local function dump(name)
     end
     out[name] = { parent = p and p:get_full_name() or nil, fields = fl }
     if p and p:get_full_name() ~= "System.Object" then dump(p:get_full_name()) end
+    -- follow serialized field types (nested parameter classes, e.g. app.Job03Parameter.DivineShotParameter)
+    if deep then
+        for _, e in ipairs(fl) do
+            if e.flags & 0x4000 ~= 0 then
+                local cands = {}
+                if e.elem then cands[#cands + 1] = e.elem end
+                cands[#cands + 1] = e.type
+                for _, t in ipairs(cands) do
+                    if (t:find("^app%.") or t:find("^via%.")) and not e.enum and not t:find("[%[`<]") then dump(t) end
+                end
+            end
+        end
+    end
 end
 for n in io.lines("rszgen_req.txt") do dump(n) end
 fs.write("rszgen_out.json", json.dump_string(out))
@@ -150,11 +164,12 @@ def build(live: dict) -> dict:
     return out
 
 
-def generate(names: list[str]) -> str:
-    """Export the layouts of `names` (and their parents) from the running game into rsz_live_dd2.json."""
+def generate(names: list[str], deep: bool = False) -> str:
+    """Export the layouts of `names` (and their parents; with deep=True also every class their serialized fields
+    use, recursively) from the running game into rsz_live_dd2.json."""
     (game.REF / "data").mkdir(parents=True, exist_ok=True)
     (game.REF / "data" / "rszgen_req.txt").write_text("\n".join(names))
-    res = game.eval_lua(LUA_EXPORT, timeout=60)
+    res = game.eval_lua(LUA_EXPORT.replace("DEEP", "true" if deep else "false"), timeout=120)
     if not res.get("ok"):
         return game.format_result(res)
     live = json.loads((game.REF / "data" / "rszgen_out.json").read_text())
