@@ -407,7 +407,7 @@ def dd2_material(action: str = "scan", pattern: str = "", per_master: int = 3, p
 
 
 @mcp.tool()
-def dd2_efx(action: str = "info", path: str = "", filter: str = "", all: bool = False, out: str = "") -> str:
+def dd2_efx(action: str = "info", path: str = "", filter: str = "", all: bool = False, out: str = "", mesh: str = "", material: str = "") -> str:
     """Game effect (.efx) files via REE-Lib, patched at read time for this game build (efx version 5965310 = "DD2New").
     'extract': copy the .efx files whose path matches the regex `path` out of the paks into research/efx (empty = everything the
     community file list knows, ~5000). 'info': entries and attributes of one .efx (mesh/material paths shown; all=True lists every
@@ -419,7 +419,7 @@ def dd2_efx(action: str = "info", path: str = "", filter: str = "", all: bool = 
     version DD2New; the ids in this build look like the original DD2 table (env REETOOL_EFX_IDS=DD2, default) for many types but the
     mesh attribute is id 31 (the Pragmata value), so the table is a hybrid. (3) several attribute structs changed size (PtBehavior,
     Spawn...). Net effect: only part of the ~5000 files parse; files with bones/actions are not walked yet. Mesh elements (id 31) store
-    their paths as [int byteSize][UTF-16 + NUL] (mesh, mirror mesh, material); those can be patched at byte level."""
+    their paths as [int byteSize][UTF-16 + NUL] (mesh, mirror mesh, material); 'patch_mesh' copies `path` to `out` with the mesh element's\n    mesh path set to `mesh` (and material to `material` if given), fixing the attribute size - no attribute parsing needed."""
     from . import ree
     if action == "extract":
         return ree.extract(path or r"\.efx\.", "efx")
@@ -431,6 +431,8 @@ def dd2_efx(action: str = "info", path: str = "", filter: str = "", all: bool = 
         return ree.run("efx-debug", path)
     if action == "normalize":
         return ree.run("efx-normalize", path, out)
+    if action == "patch_mesh":
+        return ree.efx_patch_mesh(path, out, mesh, material)
     return f"unknown action {action!r}"
 
 
