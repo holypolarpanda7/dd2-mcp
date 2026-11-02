@@ -847,11 +847,15 @@ local rows = {}
 for i = 0, l:call('get_Count') - 1 do
   local go = l:call('get_Item', i):get_GameObject()
   local ok, p = pcall(function() return go:get_Transform():get_Position() end)
-  if ok and p then rows[#rows+1] = {go:get_Name(), math.sqrt((p.x-pl.x)^2 + (p.y-pl.y)^2 + (p.z-pl.z)^2)} end
+  if ok and p then
+    local okc, ph = pcall(function() return go:getComponent(sdk.typeof('app.Character')):get_field('PhysiqueData') end)
+    rows[#rows+1] = {go:get_Name(), math.sqrt((p.x-pl.x)^2 + (p.y-pl.y)^2 + (p.z-pl.z)^2), okc and ph or 0}
+  end
 end
 table.sort(rows, function(a, b) return a[2] < b[2] end)
 local out = {}
-for i = 1, math.min(#rows, %d) do out[#out+1] = string.format('%%s d=%%.0f', rows[i][1], rows[i][2]) end
+local SZ = {[0]='S', 'M', 'L', 'B'}
+for i = 1, math.min(#rows, %d) do out[#out+1] = string.format('%%s[%%s] d=%%.0f', rows[i][1], SZ[rows[i][3]] or '?', rows[i][2]) end
 return #rows .. ' enemies' .. (#out > 0 and ': ' or '') .. table.concat(out, ', ')
 """
 
@@ -870,7 +874,7 @@ def dd2_warp(action: str = "list", target: str = "", count: int = 8, wait: float
     """Warp the player to a game AI key location (camps, towns, dungeon entrances) and look at the enemies there.
     'list': AIKeyLocation names matching the lua pattern `target` (e.g. 'Camp_0%d%d'). 'warp': go to `target` (a name like
     Gimmick_Camp_049 or a numeric id); the player appears after a few seconds and a 'Pawn Commands' tutorial popup may
-    pause the game (dd2_keys 'f*5'). 'enemies': the `count` nearest enemies of app.EnemyManager with distances (names look like
+    pause the game (dd2_keys 'f*5'). 'enemies': the `count` nearest enemies of app.EnemyManager with size class S/M/L/B (Character.PhysiqueData) and distances (names look like
     ch221001_00_3: ch221 = ghost, ch252 = rock golem; list in docs). 'survey': warp to every location matching `target`,
     wait `wait` s each, report the nearest enemies (locations that don't move the player are reported as 'no warp') - use it to find a test spot with small enemies (note: set dd2_god first and
     expect long runtimes; one location per ~`wait` seconds). Positions of characters cannot be set by transform
@@ -909,8 +913,12 @@ def dd2_warp(action: str = "list", target: str = "", count: int = 8, wait: float
         names = [n for n in table if _re.search((target or ".").replace("%d", r"\d"), n)]
         lines = []
 
-        def where() -> str:
-            return game.format_result(game.eval_lua("local p = D.player_pos(); return string.format('%.0f %.0f %.0f', p.ux, p.uy, p.uz)"))
+        def where():
+            r = game.format_result(game.eval_lua("local p = D.player_pos(); return string.format('%.1f %.1f %.1f', p.ux, p.uy, p.uz)"))
+            try:
+                return tuple(float(x) for x in r.replace("=> ", "").split())
+            except ValueError:
+                return None
 
         control.take_control(True)
         control.key(0x21); time.sleep(0.6); control.key(0x21); time.sleep(0.6)  # clear a pending tutorial popup
@@ -921,7 +929,8 @@ def dd2_warp(action: str = "list", target: str = "", count: int = 8, wait: float
             time.sleep(wait)
             control.key(0x21)  # 'f': pages the "Pawn Commands" tutorial that pops up after warps
             time.sleep(0.5)
-            if where() == before:
+            after = where()
+            if before and after and sum((a - b) ** 2 for a, b in zip(before, after)) ** 0.5 < 30:  # a real warp moves the player far
                 lines.append(f"{n}: no warp (not a valid target here)")
             else:
                 lines.append(f"{n}: " + game.format_result(game.eval_lua(_ENEMIES_LUA % count)))
