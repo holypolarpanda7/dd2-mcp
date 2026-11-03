@@ -89,3 +89,5 @@ Live (game running, bridge >= 0.10.0):
 - `dd2_find(type)` - components of a type in the current scene, nearest first, optional dump of the nearest.
 - `dd2_singletons` - which `*Manager` singletons are live (REFramework cannot enumerate them; probed by name).
 - `dd2_trace(type, method, seconds)` - call counts + sampled args of a method while you play.
+- `dd2_skeleton` - DD2 `.skeleton` files ('skln' v8, skeleton resource for DummySkeleton/CustomSkeleton): info / roundtrip / author. Format decoded from the 27 game
+  files, byte-exact round trip. See research/catalog/CREATURES.md for how a creature is assembled (mesh, mdf2, jmap, motbank, skeleton, prefab).
