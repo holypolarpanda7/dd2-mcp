@@ -1151,6 +1151,63 @@ def dd2_god(on: bool = True) -> str:
     return game.format_result(game.eval_lua(f"return D.god({'true' if on else 'false'})"))
 
 
+_SPAWN_LOAD = 'local S = loadfile("D:/DD2Modding/dd2-mcp/dd2mcp/lua/spawnlib.lua")()\n'
+_CATS = {"monster": 3, "enemy": 3, "pawn": 1, "straypawn": 2, "npc": 4}
+
+
+@mcp.tool()
+def dd2_spawn(action: str = "templates", name: str = "", cat: str = "monster", dx: float = 4.0, dz: float = 0.0, wait: float = 40.0, near: float = 25.0) -> str:
+    """Spawn / despawn game characters through the game's own GenerateManager (dd2mcp/lua/spawnlib.lua; verified 2026-11-03 for MONSTERS).
+    Needs the game focused and running a loaded save (spawning is asynchronous: the instance appears 8-20 s after the request).
+      'templates' list the character names you can spawn in `cat` (only characters the loaded world has a saved request for: the request is cloned).
+      'spawn'     name = e.g. 'ch221000_00' (goblin), dx/dz = metres from the player (east / south). One-shot (no regenerate, no re-save). Waits up to
+                  `wait` s for the instance and reports its name and distance (it may wander: AI active).
+      'despawn'   name (or '' = every monster instance within `near` m of the player except the player party): removes it for good.
+      'list'      instances of `name` (or all monsters within `near` m) with distances.
+    cat: monster (default) | straypawn | pawn. PAWN: the main pawn instance can be created but its position is not controlled yet; NPC: no stored
+    requests (NPCs use other tables) - not solved. Freeze the camp's existing enemies first (tests/spawn_lab_setup.py) and turn god mode on (dd2_god)."""
+    import time as _t
+    c = _CATS.get(cat.lower())
+    if c is None:
+        return "cat must be one of " + ", ".join(_CATS)
+    def run(code, phase="frame"):
+        r = game.eval_lua(_SPAWN_LOAD + code, phase=phase)
+        return (r.get("ret") or [None])[0] if r.get("ok") else "ERR " + str(r.get("err"))
+    if action == "templates":
+        return str(run(f"local seen, n = {{}}, {{}} for _, t in ipairs(S.templates({c})) do if not seen[t.name] then seen[t.name] = 1 n[#n+1] = t.name end end table.sort(n) return table.concat(n, ' ')"))
+    cid = f"(function() for _, t in ipairs(S.templates({c})) do if t.name == {name!r} then return t.id end end end)()"
+    listing = ("local u = D.player_pos() local rows = {} local function add(inf) local go = inf:get_field('<Instance>k__BackingField') if go then "
+               "local p = go:get_Transform():get_Position() rows[#rows+1] = go:get_Name() .. string.format(' d=%.1f', math.sqrt((p.x-u.x)^2 + (p.z-u.z)^2)) end end ")
+    if action == "list":
+        if name:
+            return str(run(f"{listing} local id = {cid} if not id then return 'unknown name (see templates)' end for _, i in ipairs(S.list({c}, id)) do add(i) end return table.concat(rows, ', ')"))
+        return str(run(f"{listing} local l = S.iim():call('getInstanceInfoList(app.GeneratorCategory)', {c}) for i = 0, l:call('get_Count') - 1 do add(l:call('get_Item', i)) end table.sort(rows) return table.concat(rows, ', ')"))
+    if action == "spawn":
+        if not name:
+            return "name required (see templates)"
+        before = str(run(f"local id = {cid} if not id then return 'ERR' end local n = {{}} for _, i in ipairs(S.list({c}, id)) do n[#n+1] = i:get_field('<Instance>k__BackingField'):get_Name() end return table.concat(n, ',')"))
+        if before.startswith("ERR"):
+            return "unknown name for this category (see templates)"
+        known = set(x for x in before.split(",") if x)
+        r = run(f"local id = {cid} local ctrl, why = S.spawn({c}, id, {dx}, {dz}, 7) return ctrl and 'requested' or tostring(why)", phase="update")
+        if r != "requested":
+            return f"spawn failed: {r}"
+        deadline = _t.time() + wait
+        while _t.time() < deadline:
+            _t.sleep(2.5)
+            now = str(run(f"{listing} local id = {cid} for _, i in ipairs(S.list({c}, id)) do add(i) end return table.concat(rows, ',')"))
+            fresh = [x for x in now.split(",") if x and x.split(" ")[0] not in known]
+            if fresh:
+                return "spawned: " + ", ".join(fresh)
+        return f"requested, but no new instance within {wait:.0f} s"
+    if action == "despawn":
+        sel = (f"local id = {cid} if not id then return 'unknown name' end local list = S.list({c}, id)" if name else
+               f"local list = {{}} local l = S.iim():call('getInstanceInfoList(app.GeneratorCategory)', {c}) for i = 0, l:call('get_Count') - 1 do list[#list+1] = l:call('get_Item', i) end")
+        return str(run(f"{sel} local u = D.player_pos() local n = 0 for _, i in ipairs(list) do local go = i:get_field('<Instance>k__BackingField') if go then "
+                       f"local p = go:get_Transform():get_Position() if math.sqrt((p.x-u.x)^2 + (p.z-u.z)^2) <= {near} then S.despawn({c}, i) n = n + 1 end end end return 'despawn requested for ' .. n", phase="update"))
+    return "action: templates | spawn | despawn | list"
+
+
 _ENEMIES_LUA = r"""
 local pl = sdk.get_managed_singleton('app.CharacterManager'):get_ManualPlayerHuman():get_GameObject():get_Transform():get_Position()
 local l = sdk.get_managed_singleton('app.EnemyManager'):get_field('_EnemyList')
