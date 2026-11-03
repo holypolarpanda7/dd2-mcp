@@ -200,3 +200,44 @@ def patch_sound_source(es_data: bytes, sound_id: int, media_id: int | None = Non
     if size is not None:
         struct.pack_into("<I", d, base + 9, size)
     return bytes(d)
+
+
+def build_event_bank(template_es: bytes, template_sound: int, template_action: int, pcm: bytes, bank_id: int, event_id: int, action_id: int,
+                     sound_id: int, media_id: int, rate: int = 48000) -> bytes:
+    """A NEW self-contained bank (BKHD + DIDX + DATA + HIRC) holding one event -> action -> sound that plays `pcm` (16-bit mono little-endian) through
+    the PCM source plugin. The action and sound objects are clones of `template_*` objects of an existing bank (so every field the engine expects is
+    already well formed); only ids, the source and the (now dangling) parent id are patched. A path of our own (e.g. natives/stm/wizard/sound/x.sbnk.1.x64)
+    avoids overriding a game bank, which crashed the game at start (2026-11-03: even a byte-identical override of mgc_skill_m / _es did)."""
+    objs = hirc(template_es)
+    bk_off, bk_sz = chunks(template_es)["BKHD"]
+    bkhd = bytearray(template_es[bk_off:bk_off + bk_sz])
+    struct.pack_into("<I", bkhd, 4, bank_id)
+    wem = pcm_wem(pcm, rate)
+    # sound clone: new id (hirc header is type u8, size u32, id u32), PCM plugin, our media, parent id zeroed (it was an actor-mixer of the template bank)
+    _, sb, _ = objs[template_sound]
+    sb = bytearray(sb)
+    old_parent = None
+    for i in range(0, len(sb) - 3):
+        v = struct.unpack_from("<I", sb, i)[0]
+        if v in objs and v != template_sound and objs[v][0] == 7:
+            old_parent = i
+    struct.pack_into("<IBII", sb, 0, 0x00010001, 0, media_id, len(wem))
+    if old_parent is not None:
+        struct.pack_into("<I", sb, old_parent, 0)
+    sound = bytes([2]) + struct.pack("<I", len(sb) + 4) + struct.pack("<I", sound_id) + bytes(sb)
+    _, ab, _ = objs[template_action]
+    ab = bytearray(ab)
+    struct.pack_into("<I", ab, 2, sound_id)
+    struct.pack_into("<I", ab, len(ab) - 4, bank_id)   # a Play action ends with fadeCurve u8 + the id of the BANK that holds its target: ours, not the template's
+    action = bytes([3]) + struct.pack("<I", len(ab) + 4) + struct.pack("<I", action_id) + bytes(ab)
+    eb = bytes([1]) + struct.pack("<I", action_id)
+    event = bytes([4]) + struct.pack("<I", len(eb) + 4) + struct.pack("<I", event_id) + eb
+    hirc_body = struct.pack("<I", 3) + sound + action + event
+    # Wwise media must start on the bank's alignment (BKHD says 16) in ABSOLUTE terms: the DIDX offsets are relative to the DATA payload, whose own
+    # position in the file is 8 + len(BKHD) + 8 + len(DIDX) + 8; the authoring tool pads the first media so that sum is aligned (the game's mgc_skill_m has
+    # its DATA at 3312 = 16 * 207; ours was at 60 and crashed / loaded nothing)
+    data_start = 8 + len(bkhd) + 8 + 12 + 8
+    pad = (-data_start) % 16
+    didx = struct.pack("<III", media_id, pad, len(wem))
+    return (b"BKHD" + struct.pack("<I", len(bkhd)) + bytes(bkhd) + b"DIDX" + struct.pack("<I", len(didx)) + didx +
+            b"DATA" + struct.pack("<I", pad + len(wem)) + b"\0" * pad + wem + b"HIRC" + struct.pack("<I", len(hirc_body)) + hirc_body)
