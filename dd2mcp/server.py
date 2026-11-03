@@ -136,7 +136,9 @@ def dd2_wwise(action: str = "banks", bank: str = "", id: int = 0, out: str = "")
                 everything the event plays (actions -> containers -> sounds), each media id, codec, size and the `_m` bank + offset it lives in,
                 and which other events share those media.
       'extract' bank = stem, id = media id, out = directory: writes <id>.wem (Wwise Vorbis / PCM; convert with vgmstream to hear or edit it).
-    Editing helpers for scripts: wwise.pcm_wem / rebuild_media_bank / patch_sound_source."""
+    Editing helpers for scripts: wwise.build_layered_banks (new es+m pair whose event plays game sounds with a Pitch property) / rebuild_media_bank /
+    patch_sound_source. PCM WEM sources are SILENTLY DROPPED by the game's engine: reuse game Vorbis media and edit with sound properties.
+    Getting a custom bank to play in game (the engine loads banks only from deserialized .user data, not sdk.create_resource): docs/wwise-custom-banks.md."""
     from . import pak, wwise
     import pathlib as _p
     if action == "banks":

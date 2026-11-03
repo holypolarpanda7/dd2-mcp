@@ -203,7 +203,7 @@ def patch_sound_source(es_data: bytes, sound_id: int, media_id: int | None = Non
 
 
 def build_event_bank(template_es: bytes, template_sound: int, template_action: int, pcm: bytes, bank_id: int, event_id: int, action_id: int,
-                     sound_id: int, media_id: int, rate: int = 48000) -> bytes:
+                     sound_id: int, media_id: int, rate: int = 48000, wem: bytes | None = None, pitch_cents: float | None = None) -> bytes:
     """A NEW self-contained bank (BKHD + DIDX + DATA + HIRC) holding one event -> action -> sound that plays `pcm` (16-bit mono little-endian) through
     the PCM source plugin. The action and sound objects are clones of `template_*` objects of an existing bank (so every field the engine expects is
     already well formed); only ids, the source and the (now dangling) parent id are patched. A path of our own (e.g. natives/stm/wizard/sound/x.sbnk.1.x64)
@@ -212,7 +212,11 @@ def build_event_bank(template_es: bytes, template_sound: int, template_action: i
     bk_off, bk_sz = chunks(template_es)["BKHD"]
     bkhd = bytearray(template_es[bk_off:bk_off + bk_sz])
     struct.pack_into("<I", bkhd, 4, bank_id)
-    wem = pcm_wem(pcm, rate)
+    plugin = 0x00010001
+    if wem is None:
+        wem = pcm_wem(pcm, rate)
+    else:   # a ready-made WEM (e.g. the game's own Vorbis): keep the template's source plugin
+        plugin = struct.unpack_from('<I', objs[template_sound][1], 0)[0]
     # sound clone: new id (hirc header is type u8, size u32, id u32), PCM plugin, our media, parent id zeroed (it was an actor-mixer of the template bank)
     _, sb, _ = objs[template_sound]
     sb = bytearray(sb)
@@ -221,9 +225,17 @@ def build_event_bank(template_es: bytes, template_sound: int, template_action: i
         v = struct.unpack_from("<I", sb, i)[0]
         if v in objs and v != template_sound and objs[v][0] == 7:
             old_parent = i
-    struct.pack_into("<IBII", sb, 0, 0x00010001, 0, media_id, len(wem))
-    if old_parent is not None:
-        struct.pack_into("<I", sb, old_parent, 0)
+    struct.pack_into("<IBII", sb, 0, plugin, 0, media_id, len(wem))
+    if pitch_cents is not None and old_parent is not None:
+        # property bundle follows the parent id: u8 bit vector, u8 cProps, cProps x u8 ids, cProps x f32 values. Add id 2 (Pitch, cents) (ids stay sorted).
+        pb = old_parent + 4
+        n = sb[pb + 1]
+        ids = list(sb[pb + 2:pb + 2 + n])
+        vals = list(struct.unpack_from("<%df" % n, sb, pb + 2 + n))
+        d = dict(zip(ids, vals)); d[2] = pitch_cents
+        ks = sorted(d)
+        sb = sb[:pb + 1] + bytes([len(ks)]) + bytes(ks) + struct.pack("<%df" % len(ks), *[d[k] for k in ks]) + sb[pb + 2 + n + 4 * n:]
+    # the parent actor-mixer is KEPT: it lives in a startup-loaded bank and supplies the output bus; zeroing it gave a post that was accepted but silent
     sound = bytes([2]) + struct.pack("<I", len(sb) + 4) + struct.pack("<I", sound_id) + bytes(sb)
     _, ab, _ = objs[template_action]
     ab = bytearray(ab)
@@ -244,10 +256,10 @@ def build_event_bank(template_es: bytes, template_sound: int, template_action: i
 
 
 def build_event_banks(template_es: bytes, template_m: bytes, template_sound: int, template_action: int, pcm: bytes, bank_id: int, media_bank_id: int,
-                      event_id: int, action_id: int, sound_id: int, media_id: int, rate: int = 48000) -> tuple:
+                      event_id: int, action_id: int, sound_id: int, media_id: int, rate: int = 48000, wem: bytes | None = None, pitch_cents: float | None = None) -> tuple:
     """Like build_event_bank but SPLIT the way every game bank is: (`_es` = BKHD + HIRC, `_m` = BKHD + DIDX + DATA). The game never ships a bank with
     both (checked 2026-11-03 over its eqit / it / sm / ring / lantern / gm / harpy banks), so the loader may rely on it."""
-    one = build_event_bank(template_es, template_sound, template_action, pcm, bank_id, event_id, action_id, sound_id, media_id, rate)
+    one = build_event_bank(template_es, template_sound, template_action, pcm, bank_id, event_id, action_id, sound_id, media_id, rate, wem, pitch_cents)
     c = chunks(one)
     hirc_chunk = one[c["HIRC"][0] - 8:c["HIRC"][0] + c["HIRC"][1]]
     bk = lambda bid, tmpl: (lambda off, sz: (lambda b: b"BKHD" + struct.pack("<I", len(b)) + bytes(b))(bytearray(tmpl[off:off + sz])))(*chunks(tmpl)["BKHD"])
@@ -256,7 +268,7 @@ def build_event_banks(template_es: bytes, template_m: bytes, template_sound: int
     es = b"BKHD" + struct.pack("<I", len(es_bk)) + bytes(es_bk) + hirc_chunk
     m_bk = bytearray(template_m[chunks(template_m)["BKHD"][0]:chunks(template_m)["BKHD"][0] + chunks(template_m)["BKHD"][1]])
     struct.pack_into("<I", m_bk, 4, media_bank_id)
-    wem = pcm_wem(pcm, rate)
+    wem = wem if wem is not None else pcm_wem(pcm, rate)
     data_start = 8 + len(m_bk) + 8 + 12 + 8
     pad = (-data_start) % 16
     didx = struct.pack("<III", media_id, pad, len(wem))
@@ -271,3 +283,51 @@ def fnv(name: str) -> int:
     for c in name.lower().encode():
         h = ((h * 16777619) & 0xFFFFFFFF) ^ c
     return h
+
+
+def build_layered_banks(template_es: bytes, layers: list, bank_id: int, media_bank_id: int, event_id: int, template_m: bytes) -> tuple:
+    """A NEW (`_es`, `_m`) bank pair whose event plays several layers at once, each a clone of a game sound + play action with its own (game) WEM and
+    Pitch property. layers: [{'sound': template sound id, 'action': template action id, 'wem': bytes, 'pitch_cents': float|None,
+    'sound_id': int, 'action_id': int, 'media_id': int}]. The sounds keep their parent actor-mixer (it supplies the output bus). Verified in game for one layer."""
+    objs = hirc(template_es)
+    hp = b""
+    for L in layers:
+        _, sb, _ = objs[L["sound"]]
+        sb = bytearray(sb)
+        parent = None
+        for i in range(0, len(sb) - 3):
+            v = struct.unpack_from("<I", sb, i)[0]
+            if v in objs and v != L["sound"] and objs[v][0] == 7:
+                parent = i
+        plugin = struct.unpack_from("<I", sb, 0)[0]
+        struct.pack_into("<IBII", sb, 0, plugin, 0, L["media_id"], len(L["wem"]))
+        if L.get("pitch_cents") is not None and parent is not None:
+            pb = parent + 4
+            n = sb[pb + 1]
+            d = dict(zip(sb[pb + 2:pb + 2 + n], struct.unpack_from("<%df" % n, sb, pb + 2 + n)))
+            d[2] = L["pitch_cents"]
+            ks = sorted(d)
+            sb = sb[:pb + 1] + bytes([len(ks)]) + bytes(ks) + struct.pack("<%df" % len(ks), *[d[k] for k in ks]) + sb[pb + 2 + n + 4 * n:]
+        hp += bytes([2]) + struct.pack("<I", len(sb) + 4) + struct.pack("<I", L["sound_id"]) + bytes(sb)
+        _, ab, _ = objs[L["action"]]
+        ab = bytearray(ab)
+        struct.pack_into("<I", ab, 2, L["sound_id"])
+        struct.pack_into("<I", ab, len(ab) - 4, bank_id)
+        hp += bytes([3]) + struct.pack("<I", len(ab) + 4) + struct.pack("<I", L["action_id"]) + bytes(ab)
+    eb = bytes([len(layers)]) + b"".join(struct.pack("<I", L["action_id"]) for L in layers)
+    hp += bytes([4]) + struct.pack("<I", len(eb) + 4) + struct.pack("<I", event_id) + eb
+    hirc_chunk = b"HIRC" + struct.pack("<I", 4 + len(hp) - 0) + struct.pack("<I", 2 * len(layers) + 1) + hp
+    c = chunks(template_es)
+    es_bk = bytearray(template_es[c["BKHD"][0]:c["BKHD"][0] + c["BKHD"][1]]); struct.pack_into("<I", es_bk, 4, bank_id)
+    es = b"BKHD" + struct.pack("<I", len(es_bk)) + bytes(es_bk) + hirc_chunk
+    cm = chunks(template_m)
+    m_bk = bytearray(template_m[cm["BKHD"][0]:cm["BKHD"][0] + cm["BKHD"][1]]); struct.pack_into("<I", m_bk, 4, media_bank_id)
+    data_start = 8 + len(m_bk) + 8 + 12 * len(layers) + 8
+    pad = (-data_start) % 16
+    didx, data, off = b"", b"\0" * pad, pad
+    for L in layers:
+        w = L["wem"] + b"\0" * ((-len(L["wem"])) % 16)   # keep every media 16-aligned
+        didx += struct.pack("<III", L["media_id"], off, len(L["wem"]))
+        data += w; off += len(w)
+    mb = b"BKHD" + struct.pack("<I", len(m_bk)) + bytes(m_bk) + b"DIDX" + struct.pack("<I", len(didx)) + didx + b"DATA" + struct.pack("<I", len(data)) + data
+    return es, mb
