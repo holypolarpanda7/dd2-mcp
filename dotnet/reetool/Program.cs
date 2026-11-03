@@ -25,7 +25,7 @@ try {
         "mesh-import" => MeshImport(args),
         "mesh-info" => MeshInfo(args[1]),
         "mesh-rt" => MeshRoundTrip(args),
-        "mdf-info" => MdfInfo(args[1]),
+        "mdf-info" => MdfInfo(args[1], args.Length > 2 && args[2] == "--full"),
         "mdf-scan" => MdfScan(args[1], args.Length > 2 ? args[2] : "", args.Length > 3 ? int.Parse(args[3]) : 3),
         "efx-debug" => EfxDebug(args[1]),
         "efx-normalize" => EfxNormalizeCmd(args[1], args[2]),
@@ -69,10 +69,16 @@ static int MeshRoundTrip(string[] a) {
     return 0;
 }
 
-static int MdfInfo(string path) {
+static int MdfInfo(string path, bool full) {
     var f = new MdfFile(new FileHandler(path, false));
     if (!f.Read()) return Fail("read failed");
-    foreach (var m in f.Materials) Console.WriteLine($"{m.Name} master={m.MasterMaterial} textures={m.Textures.Count} params={m.Parameters.Count}");
+    foreach (var m in f.Materials) {
+        Console.WriteLine($"{m.Name} master={m.MasterMaterial} textures={m.Textures.Count} params={m.Parameters.Count}");
+        if (!full) continue;
+        // slot numbers are what Mesh:setMaterialTexture(material, slot, ...) and setMaterialFloat/Float4(material, index, ...) take at runtime
+        for (int i = 0; i < m.Textures.Count; i++) Console.WriteLine($"  tex[{i}] {m.Textures[i].texType} = {m.Textures[i].texPath}");
+        for (int i = 0; i < m.Parameters.Count; i++) { var p = m.Parameters[i]; Console.WriteLine($"  param[{i}] {p.paramName} x{p.componentCount} = ({p.parameter.X:0.###}, {p.parameter.Y:0.###}, {p.parameter.Z:0.###}, {p.parameter.W:0.###})"); }
+    }
     return 0;
 }
 
