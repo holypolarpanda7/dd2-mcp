@@ -241,3 +241,33 @@ def build_event_bank(template_es: bytes, template_sound: int, template_action: i
     didx = struct.pack("<III", media_id, pad, len(wem))
     return (b"BKHD" + struct.pack("<I", len(bkhd)) + bytes(bkhd) + b"DIDX" + struct.pack("<I", len(didx)) + didx +
             b"DATA" + struct.pack("<I", pad + len(wem)) + b"\0" * pad + wem + b"HIRC" + struct.pack("<I", len(hirc_body)) + hirc_body)
+
+
+def build_event_banks(template_es: bytes, template_m: bytes, template_sound: int, template_action: int, pcm: bytes, bank_id: int, media_bank_id: int,
+                      event_id: int, action_id: int, sound_id: int, media_id: int, rate: int = 48000) -> tuple:
+    """Like build_event_bank but SPLIT the way every game bank is: (`_es` = BKHD + HIRC, `_m` = BKHD + DIDX + DATA). The game never ships a bank with
+    both (checked 2026-11-03 over its eqit / it / sm / ring / lantern / gm / harpy banks), so the loader may rely on it."""
+    one = build_event_bank(template_es, template_sound, template_action, pcm, bank_id, event_id, action_id, sound_id, media_id, rate)
+    c = chunks(one)
+    hirc_chunk = one[c["HIRC"][0] - 8:c["HIRC"][0] + c["HIRC"][1]]
+    bk = lambda bid, tmpl: (lambda off, sz: (lambda b: b"BKHD" + struct.pack("<I", len(b)) + bytes(b))(bytearray(tmpl[off:off + sz])))(*chunks(tmpl)["BKHD"])
+    es_bk = bytearray(chunks(template_es)["BKHD"][1] and template_es[chunks(template_es)["BKHD"][0]:chunks(template_es)["BKHD"][0] + chunks(template_es)["BKHD"][1]])
+    struct.pack_into("<I", es_bk, 4, bank_id)
+    es = b"BKHD" + struct.pack("<I", len(es_bk)) + bytes(es_bk) + hirc_chunk
+    m_bk = bytearray(template_m[chunks(template_m)["BKHD"][0]:chunks(template_m)["BKHD"][0] + chunks(template_m)["BKHD"][1]])
+    struct.pack_into("<I", m_bk, 4, media_bank_id)
+    wem = pcm_wem(pcm, rate)
+    data_start = 8 + len(m_bk) + 8 + 12 + 8
+    pad = (-data_start) % 16
+    didx = struct.pack("<III", media_id, pad, len(wem))
+    mb = (b"BKHD" + struct.pack("<I", len(m_bk)) + bytes(m_bk) + b"DIDX" + struct.pack("<I", len(didx)) + didx +
+          b"DATA" + struct.pack("<I", pad + len(wem)) + b"\0" * pad + wem)
+    return es, mb
+
+
+def fnv(name: str) -> int:
+    """Wwise id of a string (bank name, event name...): 32-bit FNV-1 of the lower-cased text (verified: 'mgc_skill_es' = 0x90505041 = that bank's BKHD id)."""
+    h = 2166136261
+    for c in name.lower().encode():
+        h = ((h * 16777619) & 0xFFFFFFFF) ^ c
+    return h
