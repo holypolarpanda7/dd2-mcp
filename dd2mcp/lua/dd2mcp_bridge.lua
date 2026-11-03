@@ -11,7 +11,7 @@ local DATA = "dd2mcp/"
 local CMD, RESULT = DATA .. "in.lua", DATA .. "out.json"
 
 D = D or {}
-D.version = "0.9.0"
+D.version = "0.10.0"
 local next_poll, queued = 0, nil  -- the last command id lives on D (D.last_id) so a reload cannot re-run it
 
 function D.show(v)
@@ -579,6 +579,182 @@ function D.update()
         queued = nil
         run(q.id, q.body, "update")
     end
+end
+
+-- ---------------------------------------------------------------------------------------------
+-- Introspection (0.10.0): D.dump / D.find / D.singletons / D.trace*
+-- ---------------------------------------------------------------------------------------------
+local function tname(o)
+    local ok, n = pcall(function() return o:get_type_definition():get_full_name() end)
+    return ok and n or nil
+end
+
+local function is_valuetype_table(v) return type(v) == "table" or (type(v) == "userdata" and not tname(v)) end
+
+-- One field value as a short string (objects as <Type>, collections as counts + first items).
+local function brief(v, depth, seen, maxitems)
+    local t = type(v)
+    if v == nil then return "nil" end
+    if t == "string" then return string.format("%q", #v > 120 and v:sub(1, 120) .. "..." or v) end
+    if t == "number" then
+        if math.type(v) == "float" then return string.format("%.4g", v) end
+        return tostring(v)
+    end
+    if t == "boolean" then return tostring(v) end
+    if t == "table" then return D.show(v) end
+    if t ~= "userdata" then return tostring(v) end
+    local n = tname(v)
+    if not n then  -- value types (Vector3f, Guid, ...): show their fields via tostring
+        local ok, s = pcall(tostring, v)
+        return ok and s or "<value>"
+    end
+    if n == "System.String" then
+        local ok, s = pcall(function() return v:call("ToString()") end)
+        return ok and string.format("%q", s) or "<string>"
+    end
+    if n:find("^System%.Collections%.Generic%.List") or n:find("%[%]$") then
+        local ok, cnt = pcall(function() return n:find("%[%]$") and v:call("get_Length") or v:call("get_Count") end)
+        if not ok then return "<" .. n .. ">" end
+        local items = {}
+        for i = 0, math.min(cnt, maxitems) - 1 do
+            local ok2, e = pcall(function()
+                return n:find("%[%]$") and v:call("GetValue(System.Int32)", i) or v:call("get_Item", i)
+            end)
+            items[#items + 1] = ok2 and brief(e, depth - 1, seen, maxitems) or "?"
+        end
+        return "<" .. n .. " x" .. cnt .. ">" .. (#items > 0 and " [" .. table.concat(items, ", ") .. (cnt > #items and ", ..." or "") .. "]" or "")
+    end
+    if n:find("^System%.Collections%.Generic%.Dictionary") then
+        local ok, cnt = pcall(function() return v:call("get_Count") end)
+        return "<" .. n .. " x" .. (ok and cnt or "?") .. ">"
+    end
+    return "<" .. n .. ">"
+end
+
+-- Field-by-field dump of a managed object: {type, fields = {name = value-string}}; depth > 0 expands object fields.
+-- opts: pat (field-name filter), max (collection items shown), statics (include static fields)
+function D.dump(obj, depth, opts)
+    opts = opts or {}
+    depth = depth or 1
+    local seen = opts.seen or {}
+    local td = obj:get_type_definition()
+    local res = { type = td:get_full_name(), fields = {} }
+    local cur = td
+    while cur and cur:get_full_name() ~= "System.Object" do
+        for _, f in ipairs(cur:get_fields()) do
+            local name = f:get_name()
+            if (opts.statics or not f:is_static()) and (not opts.pat or name:lower():find(opts.pat:lower(), 1, true)) then
+                local ok, v = pcall(f.get_data, f, f:is_static() and nil or obj)
+                local key = (name:match("^<(.+)>k__BackingField$") or name) .. " : " .. f:get_type():get_full_name()
+                if not ok then
+                    res.fields[key] = "<unreadable>"
+                elseif depth > 0 and type(v) == "userdata" and tname(v) and tname(v) ~= "System.String"
+                    and not tname(v):find("^System%.Collections") and not tname(v):find("%[%]$") then
+                    local ok2, sub = pcall(D.dump, v, depth - 1, { pat = nil, max = opts.max, seen = seen })
+                    res.fields[key] = ok2 and sub or brief(v, 0, seen, opts.max or 4)
+                else
+                    local shown = brief(v, depth, seen, opts.max or 4)
+                    if type(v) == "number" then
+                        local ft = f:get_type()
+                        local okE, isE = pcall(function() return ft:is_a("System.Enum") end)
+                        if okE and isE then
+                            local okN, en = pcall(D.enum_name, ft:get_full_name(), v)
+                            if okN then shown = shown .. ":" .. en end
+                        end
+                    end
+                    res.fields[key] = shown
+                end
+            end
+        end
+        cur = cur:get_parent_type()
+    end
+    return res
+end
+
+-- Live components of a type: [{go, pos, dist, comp}], nearest to the player first. Uses the scene's component search.
+function D.find(typename, limit, pat)
+    local td = sdk.find_type_definition(typename)
+    if not td then return "no type " .. typename end
+    local scene = sdk.call_native_func(sdk.get_native_singleton("via.SceneManager"),
+        sdk.find_type_definition("via.SceneManager"), "get_CurrentScene()")
+    local arr = scene:call("findComponents(System.Type)", td:get_runtime_type())
+    local pp = D.player_pos()
+    local res = {}
+    for _, c in ipairs(arr:get_elements()) do
+        local ok, row = pcall(function()
+            local go = c:call("get_GameObject")
+            local name = go:call("get_Name")
+            if pat and not name:lower():find(pat:lower(), 1, true) then return nil end
+            local v = go:call("get_Transform"):call("get_Position")
+            local d = pp and math.sqrt((v.x - pp.x) ^ 2 + (v.y - pp.y) ^ 2 + (v.z - pp.z) ^ 2) or 0
+            return { go = name, comp = c, dist = math.floor(d * 10) / 10, x = v.x, y = v.y, z = v.z }
+        end)
+        if ok and row then res[#res + 1] = row end
+    end
+    table.sort(res, function(a, b) return a.dist < b.dist end)
+    local total = #res
+    while #res > (limit or 25) do table.remove(res) end
+    return res, total
+end
+
+-- Call tracing: D.trace_start(type, method) hooks every overload once (hooks cannot be removed; traces just stop
+-- recording when disabled). Records call count + sampled args/return; D.trace_read(key) / D.trace_stop().
+D.traces = D.traces or {}
+function D.trace_start(typename, method, maxsamples)
+    local td = sdk.find_type_definition(typename)
+    if not td then error("no type " .. typename) end
+    local n = 0
+    local cur = td
+    while cur and cur:get_full_name() ~= "System.Object" and n == 0 do
+        for _, m in ipairs(cur:get_methods()) do
+            if m:get_name() == method then
+                local key = cur:get_full_name() .. "::" .. method .. "/" .. #(m:get_param_types() or {})
+                local tr = D.traces[key] or { count = 0, samples = {}, on = true, hooked = false }
+                tr.on, tr.max = true, maxsamples or 12
+                D.traces[key] = tr
+                if not tr.hooked then
+                    tr.hooked = true
+                    sdk.hook(m, function(args)
+                        if not tr.on then return end
+                        tr.count = tr.count + 1
+                        if #tr.samples < tr.max then
+                            local a = {}
+                            for i = 3, 8 do
+                                local ok, s = pcall(function()
+                                    local v = args[i]
+                                    if v == nil then return nil end
+                                    local o = sdk.to_managed_object(v)
+                                    if o and tname(o) then return brief(o, 0, {}, 2) end
+                                    return tostring(sdk.to_int64(v))
+                                end)
+                                if ok and s then a[#a + 1] = s end
+                            end
+                            tr.samples[#tr.samples + 1] = string.format("t=%.1f this=%s args=(%s)", os.clock(),
+                                (function() local ok, o = pcall(sdk.to_managed_object, args[2]); return ok and o and (tname(o) or "?") or "-" end)(),
+                                table.concat(a, ", "))
+                        end
+                    end, function(ret) return ret end)
+                end
+                n = n + 1
+            end
+        end
+        cur = cur:get_parent_type()
+    end
+    if n == 0 then error("no method " .. typename .. "::" .. method) end
+    return n
+end
+
+function D.trace_read(clear)
+    local res = {}
+    for k, tr in pairs(D.traces) do
+        res[#res + 1] = { key = k, count = tr.count, on = tr.on, samples = tr.samples }
+        if clear then tr.count, tr.samples = 0, {} end
+    end
+    return res
+end
+
+function D.trace_stop()
+    for _, tr in pairs(D.traces) do tr.on = false end
 end
 
 -- Registered once per game run; they call through D, so reloading this file swaps the logic.
