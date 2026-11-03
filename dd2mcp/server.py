@@ -82,10 +82,11 @@ def _render_dump(d, indent: str = "") -> list[str]:
 
 
 @mcp.tool()
-def dd2_inspect(expr: str, depth: int = 1, filter: str = "", max_items: int = 4, statics: bool = False) -> str:
+def dd2_inspect(expr: str, depth: int = 1, filter: str = "", max_items: int = 4, statics: bool = False,
+                max_lines: int = 150) -> str:
     """Dump a live managed object field by field (names, declared types, values; nested objects `depth` levels, collections
     as count + first `max_items`). expr: a manager singleton name ('app.ItemManager') or any Lua expression that yields
-    an object ('D.player()', 'D.player():get_GameObject()'). filter: substring of field names. The fastest way to learn
+    an object ('D.player()', 'D.player():get_GameObject()'). filter: substring of field names. Output is capped at max_lines. The fastest way to learn
     what a manager or component actually stores. Use dd2_types for methods, dd2_catalog to find which manager owns a feature."""
     code = (_RESOLVE_LUA + f"local o = R({json.dumps(expr)})\n"
             f"print(json.dump_string(D.dump(o, {int(depth)}, {{pat = {json.dumps(filter or None)}, max = {int(max_items)}, "
@@ -94,7 +95,10 @@ def dd2_inspect(expr: str, depth: int = 1, filter: str = "", max_items: int = 4,
     if not res.get("ok"):
         return game.format_result(res)
     try:
-        return "\n".join(_render_dump(json.loads("".join(res["out"]))))
+        lines = _render_dump(json.loads("".join(res["out"])))
+        if len(lines) > max_lines:  # deep dumps of big managers can run to 100k characters
+            lines = lines[:max_lines] + [f"... {len(lines) - max_lines} more lines (lower depth, use filter=, or raise max_lines)"]
+        return "\n".join(lines)
     except (ValueError, KeyError):
         return game.format_result(res)
 
@@ -589,7 +593,22 @@ def dd2_material(action: str = "scan", pattern: str = "", per_master: int = 3, p
     if action == "scan":
         return ree.run("mdf-scan", ree.RESEARCH / "mdf", pattern, per_master)
     if action == "info":
-        return ree.run("mdf-info", path)
+        import pathlib as _p
+        from . import pak
+        local = _p.Path(path)
+        if not local.exists():  # a pak path ('natives/stm/character/...mdf2.51') or an in-game path ('Character/ch/ch25_000/ch25_000.mdf2')
+            rel = path.replace("\\", "/").lstrip("/")
+            rel = rel[len("natives/stm/"):] if rel.lower().startswith("natives/stm/") else rel
+            if not rel.endswith(".51"):
+                rel += ".51"
+            local = ree.RESEARCH / "mdf" / rel.lower()
+            if not local.exists():
+                found = pak.find("natives/stm/" + rel)
+                if not found:
+                    return f"{path}: not a local file and in no pak"
+                local.parent.mkdir(parents=True, exist_ok=True)
+                local.write_bytes(found[1])
+        return ree.run("mdf-info", str(local))
     return f"unknown action {action!r}"
 
 
