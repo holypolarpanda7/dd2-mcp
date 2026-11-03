@@ -335,7 +335,9 @@ local function hook_selectors()
                     try("skill", function()
                         local name = str_of(args[3])
                         local layer = sdk.to_int64(args[4]) & 0xffffffff
-                        local owner = sel_owner[sdk.to_managed_object(args[2]):get_address()] or "?"
+                        local sel = sdk.to_managed_object(args[2])
+                        local owner = sel_owner[sel:get_address()]
+                        if not owner then local ch = sel:get_field("<Chara>k__BackingField") owner = ch and go_name(ch) or "?" end
                         emit("skill", { ev = "request", job = j, who = owner, action = name, layer = layer })
                     end)
                 end, function(r) return r end)

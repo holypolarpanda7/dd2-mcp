@@ -11,13 +11,15 @@ import shutil
 
 from . import game
 
-LUA = pathlib.Path(__file__).parent / "lua" / "dd2mcp_watch.lua"
-STREAMS = ("meta", "state", "node", "snap", "key", "damage", "skill", "gui", "item", "inventory", "hook", "errors")
+LUA_DIR = pathlib.Path(__file__).parent / "lua"
+MODULES = ("dd2mcp_watch.lua", "dd2mcp_watch_ai.lua", "dd2mcp_watch_input.lua", "dd2mcp_watch_world.lua")
+STREAMS = ("meta", "state", "node", "snap", "key", "damage", "skill", "gui", "item", "inventory", "hook", "errors", "ai", "input", "order", "world")
 
 
 def install() -> str:
-    dst = game.REF / "autorun" / "dd2mcp_watch.lua"
-    shutil.copyfile(LUA, dst)
+    for m in MODULES:
+        shutil.copyfile(LUA_DIR / m, game.REF / "autorun" / m)
+    dst = game.REF / "autorun"
     hooks = game.BRIDGE_DIR / "watch_hooks.txt"
     if not hooks.exists():
         hooks.write_text("# Extra hooks (type::method signature), re-read every 5 s while the game runs\n")
@@ -25,11 +27,12 @@ def install() -> str:
 
 
 def uninstall() -> str:
-    dst = game.REF / "autorun" / "dd2mcp_watch.lua"
-    if dst.exists():
-        dst.unlink()
-        return f"removed {dst}"
-    return "not installed"
+    n = 0
+    for m in MODULES:
+        f = game.REF / "autorun" / m
+        if f.exists():
+            f.unlink(); n += 1
+    return f"removed {n} watcher scripts"
 
 
 def _files(session: str | None = None):
@@ -88,7 +91,7 @@ def summary(session: str) -> str:
     for who, c in sorted(by.items(), key=lambda kv: -sum(kv[1].values()))[:14]:
         lines.append(f"    {who}: {sum(c.values())} changes; " + "; ".join(f"{k} x{v}" for k, v in c.most_common(4)))
     sk = read(session, "skill")
-    c = collections.Counter((r.get("who"), r.get("action")) for r in sk if r.get("ev") == "request")
+    c = collections.Counter((r.get("who"), r.get("action")) for r in sk if r.get("ev") == "req2" or (r.get("ev") == "request" and not any(x.get("ev") == "req2" for x in sk[:50])))
     lines.append(f"  action requests: {sum(c.values())}; top: " + "; ".join(f"{w}:{a} x{n}" for (w, a), n in c.most_common(12)))
     cs = {(r.get("job"), r.get("skill")): r.get("action") for r in sk if r.get("ev") == "custom"}
     if cs:
@@ -102,10 +105,28 @@ def summary(session: str) -> str:
         lines.append(f"  damage events: {len(dm)}; by victim: " + "; ".join(f"{v} {n}x {d:.0f}" for v, (n, d) in sorted(tot.items(), key=lambda kv: -kv[1][0])[:10]))
     ky = collections.Counter(r.get("k") for r in read(session, "key") if r.get("down"))
     lines.append("  key presses: " + ", ".join(f"{k} {n}" for k, n in ky.most_common(14)))
-    gu = collections.Counter(n for r in read(session, "gui") for n in r.get("opened", []))
+    gu = collections.Counter(n for r in read(session, "gui") for n in (r.get("opened") or []))
     lines.append("  GUI windows opened (top): " + ", ".join(f"{n} x{k}" for n, k in gu.most_common(14)))
     it = read(session, "item")
     lines.append(f"  item events: {len(it)}; " + ", ".join(f"{r.get('name')} {r.get('was')}->{r.get('num')}" for r in it[:8]))
+    ai = read(session, "ai")
+    dec = collections.defaultdict(collections.Counter)
+    for r in ai:
+        if r.get("ev") == "decision":
+            dec[r.get("kind", "?") + ":" + str(r.get("who", "?")).rsplit("_", 1)[0]][str(r.get("pack", "?")).rsplit("/", 1)[-1]] += 1
+    lines.append("  AI decisions by actor (top packs):")
+    for who, c in sorted(dec.items(), key=lambda kv: -sum(kv[1].values()))[:10]:
+        lines.append(f"    {who}: {sum(c.values())}; " + "; ".join(f"{k} x{v}" for k, v in c.most_common(6)))
+    inp = collections.Counter(a for r in read(session, "input") if r.get("who") == "player" for a in (r.get("down") or []))
+    lines.append("  player input actions: " + ", ".join(f"{k} {n}" for k, n in inp.most_common(14)))
+    od = collections.Counter(r.get("ev") for r in read(session, "order"))
+    lines.append("  pawn order events: " + ", ".join(f"{k} {n}" for k, n in od.most_common()))
+    wd = [r for r in read(session, "world") if r.get("ev") == "world"]
+    if wd:
+        lines.append(f"  world: {len(wd)} samples; weather {sorted({r.get('weather') for r in wd})}, hours {min(r.get('hour', 0) for r in wd)}-{max(r.get('hour', 0) for r in wd)}, indoor seen {any(r.get('indoor') for r in wd)}")
+    st = collections.Counter((r.get("who", "?").rsplit("_", 1)[0], a) for r in read(session, "world") if r.get("ev") == "status" for a in (r.get("active") or []))
+    if st:
+        lines.append("  status conditions seen: " + ", ".join(f"{w}:{a} x{n}" for (w, a), n in st.most_common(12)))
     er = read(session, "errors")
     if er:
         lines.append(f"  ERRORS ({len(er)} rows): " + "; ".join(f"{r.get('where')}: {r.get('msg')}" for r in er[:5]))
