@@ -2,6 +2,7 @@
 import json
 import pathlib
 import re
+import sys
 
 from mcp.server.mcpserver import MCPServer
 
@@ -52,6 +53,151 @@ def dd2_types(type_name: str, kind: str = "methods", filter: str | None = None) 
     res = game.eval_lua(f"local r = {fn}({json.dumps(type_name)}, {pat})\n"
                         "if type(r) == 'table' then for _, l in ipairs(r) do print(l) end else print(r) end")
     return game.format_result(res)
+
+
+_RESOLVE_LUA = r"""
+local function R(expr)
+  if expr:match("^[%w_.]+$") then
+    local o = sdk.get_managed_singleton(expr)
+    if not o then error("no managed singleton " .. expr .. " (use a Lua expression for anything else)") end
+    return o
+  end
+  local fn, e = load("return " .. expr, "=expr", "t")
+  if not fn then error("bad expression: " .. tostring(e)) end
+  return fn()
+end
+"""
+
+
+def _render_dump(d, indent: str = "") -> list[str]:
+    out = [f"{indent}{d['type']}"] if not indent else []
+    for k, v in (d.get("fields") or {}).items():
+        if isinstance(v, dict):
+            out.append(f"{indent}  {k}:")
+            out.append(f"{indent}    <{v['type']}>")
+            out += _render_dump(v, indent + "    ")
+        else:
+            out.append(f"{indent}  {k} = {v}")
+    return out
+
+
+@mcp.tool()
+def dd2_inspect(expr: str, depth: int = 1, filter: str = "", max_items: int = 4, statics: bool = False) -> str:
+    """Dump a live managed object field by field (names, declared types, values; nested objects `depth` levels, collections
+    as count + first `max_items`). expr: a manager singleton name ('app.ItemManager') or any Lua expression that yields
+    an object ('D.player()', 'D.player():get_GameObject()'). filter: substring of field names. The fastest way to learn
+    what a manager or component actually stores. Use dd2_types for methods, dd2_catalog to find which manager owns a feature."""
+    code = (_RESOLVE_LUA + f"local o = R({json.dumps(expr)})\n"
+            f"print(json.dump_string(D.dump(o, {int(depth)}, {{pat = {json.dumps(filter or None)}, max = {int(max_items)}, "
+            f"statics = {str(bool(statics)).lower()}}})))")
+    res = game.eval_lua(code, timeout=30)
+    if not res.get("ok"):
+        return game.format_result(res)
+    try:
+        return "\n".join(_render_dump(json.loads("".join(res["out"]))))
+    except (ValueError, KeyError):
+        return game.format_result(res)
+
+
+@mcp.tool()
+def dd2_find(type_name: str, limit: int = 25, name: str = "", inspect_nearest: bool = False) -> str:
+    """Live components of a type in the current scene, nearest to the player first: 'distance  GameObject  x y z'.
+    type_name: e.g. 'app.Gm80_055', 'app.Enemy', 'app.NPCController'. name: substring filter on the GameObject name.
+    inspect_nearest=True also dumps the nearest component's fields. Answers 'what is that thing next to me and what
+    component drives it'."""
+    code = (f"local r, total = D.find({json.dumps(type_name)}, {int(limit)}, {json.dumps(name or None)})\n"
+            "if type(r) == 'string' then print(r) return end\n"
+            "print('total ' .. total)\n"
+            "for _, e in ipairs(r) do print(string.format('%8.1f  %s  %.1f %.1f %.1f', e.dist, e.go, e.x, e.y, e.z)) end\n"
+            + ("if r[1] then print(json.dump_string(D.dump(r[1].comp, 1, {max = 4}))) end" if inspect_nearest else ""))
+    res = game.eval_lua(code, timeout=30)
+    lines = list(res.get("out") or [])
+    if inspect_nearest and lines and lines[-1].startswith("{"):
+        try:
+            lines = lines[:-1] + ["", "nearest:"] + _render_dump(json.loads(lines[-1]))
+        except ValueError:
+            pass
+    if not res.get("ok"):
+        lines.append(f"ERROR: {res.get('err')}")
+    return "\n".join(lines) or "(no output)"
+
+
+@mcp.tool()
+def dd2_trace(type_name: str, method: str, seconds: float = 5.0, samples: int = 12) -> str:
+    """Count and sample calls to a game method over `seconds` of play (every overload of that name, read-only hook).
+    Returns call counts and the first `samples` calls (this-type and arguments). Use it to learn WHICH functions the
+    game calls when you do something in game ('what runs when I cast / open the menu / pick up an item') - then
+    follow up with dd2_inspect on the objects involved. The game must be focused and running (pauses when unfocused)."""
+    import time as _t
+    start = game.eval_lua(f"return D.trace_start({json.dumps(type_name)}, {json.dumps(method)}, {int(samples)})", timeout=20)
+    if not start.get("ok"):
+        return game.format_result(start)
+    game.eval_lua("D.trace_read(true)")  # reset counters
+    _t.sleep(seconds)
+    res = game.eval_lua("local r = D.trace_read(false); D.trace_stop(); print(json.dump_string(r))", timeout=20)
+    if not res.get("ok"):
+        return game.format_result(res)
+    try:
+        rows = json.loads("".join(res["out"]))
+    except ValueError:
+        return game.format_result(res)
+    out = []
+    for r in rows:
+        if r["count"]:
+            out.append(f"{r['key']}: {r['count']} calls in {seconds}s")
+            out += [f"  {x}" for x in r["samples"]]
+    return "\n".join(out) or f"no calls to {type_name}::{method} in {seconds}s (is the game focused and the action performed?)"
+
+
+@mcp.tool()
+def dd2_singletons(filter: str = "", refresh: bool = False) -> str:
+    """Live managed singletons (the game's managers): which `*Manager` types exist right now. REFramework cannot enumerate
+    them, so every manager-like type name from the offline method map is probed with get_managed_singleton (once, cached;
+    refresh=True re-probes). Output: name, number of serialized fields, method count - then dd2_inspect any of them.
+    filter: regex on the name."""
+    cache = game.SCRATCH / "singletons.json"
+    names = None
+    if cache.exists() and not refresh:
+        try:
+            names = json.loads(cache.read_text())
+        except ValueError:
+            names = None
+    if names is None:
+        from . import catalog
+        cands = sorted(t for t in catalog.manager_candidates())
+        live, step = [], 400
+        for i in range(0, len(cands), step):
+            chunk = cands[i:i + step]
+            res = game.eval_lua("local live = {}\nfor _, n in ipairs({" + ",".join(json.dumps(c) for c in chunk) + "}) do\n"
+                                "  local ok, o = pcall(sdk.get_managed_singleton, n)\n"
+                                "  if ok and o then live[#live + 1] = n end\nend\nprint(json.dump_string(live))", timeout=60)
+            if not res.get("ok"):
+                return game.format_result(res)
+            live += json.loads("".join(res["out"]))
+        names = live
+        cache.write_text(json.dumps(names))
+    rx = re.compile(filter, re.I) if filter else None
+    shown = [n for n in names if not rx or rx.search(n)]
+    return f"{len(shown)}/{len(names)} live singletons\n" + "\n".join(shown)
+
+
+@mcp.tool()
+def dd2_where(type_name: str = "", path: str = "", action: str = "search", limit: int = 40) -> str:
+    """Which data file holds which serialized class (no game needed). 'search': regex `type_name` on class names (e.g.
+    'ItemDropParam', 'JobInformation', 'Shell') and/or regex `path` on file paths -> files with their top classes and
+    instance counts, biggest first. Then open a hit with dd2_table / dd2_rsz_file. Covers ~12k gameplay .user files
+    (not the bulk grid/sound/AI-situation folders; find those with dd2_pak list). 'build' starts the one-time background
+    index (~6 min); 'status' shows progress."""
+    import subprocess
+    from . import dataindex
+    if action == "build":
+        subprocess.Popen([sys.executable, "-m", "dd2mcp.dataindex", "build"], cwd=str(pathlib.Path(__file__).parents[1]),
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        return "index build started in the background; dd2_where action='status' shows progress"
+    if action == "status":
+        return (dataindex.PROGRESS.read_text() if dataindex.PROGRESS.exists() else "never built") + \
+               ("\nindex current" if dataindex.load() is not None else "\nindex missing or stale (paks changed)")
+    return dataindex.search(type_name, path, limit)
 
 
 @mcp.tool()
@@ -328,15 +474,56 @@ def dd2_uvar(path: str = "", name: str = "", users: bool = True, scan: bool = Fa
 
 
 @mcp.tool()
-def dd2_rszgen(names: list[str], deep: bool = False) -> str:
+def dd2_table(path: str, type: str = "", cols: str = "", where: str = "", sort: str = "", limit: int = 30,
+              depth: int = 2, names: bool = True, width: int = 28, listcols: bool = False) -> str:
+    """Spreadsheet view of a game data file (.user/.scn/.pfb; pak path or local file; no game needed): one row per
+    instance of `type` (regex; default = the most common type), flattened columns (nested objects as `_Param._Hp`,
+    `depth` levels). GUIDs that name a game text show the English string, enum fields show `3:Equip`, item rows get a
+    Name column. cols: comma list of exact names or regexes; listcols=True lists all columns. where: 'col~regex',
+    'col=val', 'col>n', 'col!=v' joined with ' & ' (matches raw or displayed value). sort: column, '-col' descending.
+    Data tables live in natives/stm/appsystem/item/itemdata, item/itemdropdata, item/itemshopdata, gui/jobmenu,
+    quest/userdata, gimmick/userdata, shell/userdata, camp/userdata, ch/<chNNN> (find more with dd2_pak list)."""
+    from . import table
+    try:
+        return table.render(path, type, cols, where, sort, limit, depth, names, width, listcols)
+    except (FileNotFoundError, ValueError) as e:
+        return str(e)
+
+
+@mcp.tool()
+def dd2_msg(action: str = "search", query: str = "", lang: str = "English", scope: str = "", limit: int = 40) -> str:
+    """Game text (.msg, 1060 files, 64k entries; no game needed). 'search': regex over entry names, GUIDs and English text
+    ('file | entry name | guid | text'); scope = regex on the file path (e.g. 'itemname', 'quest', 'pawn'). 'get': one entry by
+    GUID or exact name in every language (lang='all') plus its attributes. 'rebuild': refresh the cached index (auto when paks change).
+    Item names are entries item_name_<id> in message/ui/itemname.msg; descriptions item_detail_<id>."""
+    from . import msg
+    if action == "rebuild":
+        return f"{len(msg.index(True))} entries indexed"
+    if action == "get":
+        return msg.lookup(query, lang)
+    return msg.search(query or ".", lang, scope, limit)
+
+
+@mcp.tool()
+def dd2_rszgen(names: list[str] | None = None, deep: bool = False, hashes: list[str] | None = None, auto: bool = False) -> str:
     """Generate RSZ layouts from the running game for these type names (and their parents) into
     research/rsz/rsz_live_dd2.json; dd2_rsz_file uses them for types the community layouts lack. Type hashes are
     murmur3(utf-8 name): to name an unknown hash, collect candidate names from live objects (e.g. walk the objects
     holding the data) and compare with dd2mcp.murmur.type_hash. deep=True also follows the classes the types'
     serialized fields use (e.g. dd2_rszgen(['app.Job03Parameter'], deep=True) for the Mage's whole parameter file).
-    Needs the game running."""
+    hashes=['3d27943d', ...]: type hashes from a "types not in any layout source" error - they are turned back into names
+    by hashing every type name the offline map knows, then generated. auto=True: heal EVERY unknown hash found by the
+    dd2_where index in one go (deep). Needs the game running."""
     from . import rszgen
-    return rszgen.generate(names, deep)
+    if auto:
+        from . import dataindex
+        idx = dataindex.load()
+        if idx is None:
+            return "auto needs the dd2_where index (action='build')"
+        hashes = sorted({t for ty in idx.values() for t in ty if t.startswith("?")})
+    if hashes:
+        return rszgen.heal(hashes, deep=True) if not names else rszgen.heal(hashes, deep) + "\n" + rszgen.generate(names, deep)
+    return rszgen.generate(names or [], deep)
 
 
 @mcp.tool()
@@ -867,6 +1054,30 @@ for _, f in ipairs(td:get_fields()) do
 end
 return table.concat(out, ' ')
 """
+
+@mcp.tool()
+def dd2_catalog(action: str = "overview", query: str = "", limit: int = 60) -> str:
+    """Offline map of the game's systems (no game needed): built from the method map, the IL2CPP enum/inheritance cache and the RSZ dump.
+    'overview': subsystems with type/method counts and their managers. 'subsystem' query=name (combat, AI, pawns, enemies, npc, character,
+    items, gui, sound, effects, physics, world, save): its biggest types. 'find' query=regex: matching types, enum types, enum VALUES
+    (e.g. 'Hitdown', 'Caught') and methods. 'type' query=name (full or trailing): parents, derived types, enum values, nested enums,
+    serialized fields, methods. 'export': write the markdown map to /mnt/d/DD2Modding/research/catalog/SYSTEMS.md (outside the repos,
+    shared by all mods). Use this BEFORE probing live to find which manager/enum owns a feature."""
+    from . import catalog
+    try:
+        if action == "overview":
+            return catalog.overview()
+        if action == "subsystem":
+            return catalog.subsystem(query, limit)
+        if action == "find":
+            return catalog.find(query, limit)
+        if action == "type":
+            return catalog.type_info(query, limit)
+        if action == "export":
+            return catalog.export_md(query or "/mnt/d/DD2Modding/research/catalog/SYSTEMS.md")
+    except FileNotFoundError as e:
+        return str(e)
+    return "actions: overview, subsystem, find, type, export"
 
 
 @mcp.tool()

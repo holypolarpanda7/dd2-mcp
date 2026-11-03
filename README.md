@@ -72,3 +72,20 @@ private SDK in `<dd2-modding>/Tools/dotnet` against the Content Editor DLLs in `
 `dd2_mesh import` turns a glTF into a game `.mesh` (the Content Editor importer plus the two fixes the game needs, see the tool
 docstring); `dd2_material` extracts and scans the game's `.mdf2` files by master shader; `dd2_efx` inspects `.efx` files (REE-Lib
 0.8.1 cannot yet parse this build's efx).
+
+## Introspection tools (added 2026-11-02)
+
+Offline (no game needed):
+- `dd2_table` - spreadsheet view of any `.user/.scn/.pfb` data file: flattened columns, `where`/`sort`/`cols`, enum names
+  (`3:Equip`), GUID -> English text, item names. `dd2_table(path, listcols=True)` first to see the columns.
+- `dd2_msg` - search/get the game's text (`.msg`, 64k entries, cached English index in `~/.cache/dd2-mcp/msg_index.json`).
+- `dd2_where` - which data file holds which serialized class (index of ~12k gameplay `.user` files; build once, ~4 min).
+- `dd2_rszgen(auto=True)` / `hashes=[...]` - heal unknown type hashes: hash -> name (murmur of every known type name and
+  layout field type) -> live layout export. Together with exporting live layouts for every indexed type this took the
+  key-table decode rate from 52% to 98% (487/495 files in 16 gameplay folders). Needs the game running once.
+
+Live (game running, bridge >= 0.10.0):
+- `dd2_inspect(expr)` - field-by-field dump of a manager singleton or any Lua expression (enum values named).
+- `dd2_find(type)` - components of a type in the current scene, nearest first, optional dump of the nearest.
+- `dd2_singletons` - which `*Manager` singletons are live (REFramework cannot enumerate them; probed by name).
+- `dd2_trace(type, method, seconds)` - call counts + sampled args of a method while you play.

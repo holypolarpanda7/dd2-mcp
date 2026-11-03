@@ -177,5 +177,45 @@ def generate(names: list[str], deep: bool = False) -> str:
     old = json.loads(rszfile.LIVE.read_text()) if rszfile.LIVE.exists() else {}
     old.update(layouts)
     rszfile.LIVE.write_text(json.dumps(old, indent=0))
-    rszfile._types = None
+    rszfile._cands = None  # re-read the layout sources
     return f"exported {len(live)} types, {len(layouts)} layouts written to {rszfile.LIVE} ({len(old)} total)"
+
+
+def name_universe() -> dict[int, str]:
+    """type hash -> name for every type name we know offline (method map, enums, inheritance cache, 2024 dump,
+    nested-type spellings), so hashes found in game files can be turned back into names."""
+    import json as _j
+    from . import catalog
+    c = catalog._build()
+    names = set(c["methods"]) | set(c["enums"]) | set(c["subs"]) | set(c["parent"])
+    for kids in c["subs"].values():
+        names.update(kids)
+    names |= {v["name"] for v in _j.loads(rsz.DUMP.read_text()).values() if v.get("name")}
+    if rszfile.LIVE.exists():  # names discovered by earlier exports (nested field types)
+        names |= {v["name"] for v in _j.loads(rszfile.LIVE.read_text()).values() if v.get("name")}
+    for lst in rszfile.candidates().values():  # field/element types named by layouts (nested + generic parameter classes)
+        for lay in lst:
+            names.update(f["original_type"] for f in lay["fields"] if f.get("original_type"))
+    out = {}
+    for n in names:
+        out.setdefault(murmur.type_hash(n), n)
+        if "+" in n:
+            out.setdefault(murmur.type_hash(n.replace("+", ".")), n.replace("+", "."))
+    return out
+
+
+def heal(hashes: list[str], deep: bool = True) -> str:
+    """Name the unknown type hashes (hex strings, '?' prefix allowed) via name_universe and export their layouts
+    from the running game (generate). Reports the hashes no known name matches."""
+    uni = name_universe()
+    want = sorted({int(h.lstrip("?"), 16) for h in hashes})
+    have = rszfile.candidates()
+    todo = [h for h in want if h not in have]
+    names = [uni[h] for h in todo if h in uni]
+    unknown = [f"{h:08x}" for h in todo if h not in uni]
+    msg = f"{len(want)} hashes, {len(todo)} without a layout, {len(names)} nameable, {len(unknown)} unnamed"
+    if names:
+        msg += "\n" + generate(names, deep)
+    if unknown:
+        msg += "\nunnamed (no known type has this hash): " + " ".join(unknown[:40]) + (" ..." if len(unknown) > 40 else "")
+    return msg

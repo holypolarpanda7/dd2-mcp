@@ -213,6 +213,8 @@ class Block:
                 f, p = _fields(self.d, p, lay, i, self.end_limit)
             except Bad as e:
                 raise Bad(str(e), i, first) from None
+            except (struct.error, IndexError) as e:  # read past the data: this layout is too long
+                raise Bad(f"{lay['name']}: read past the end ({e})", i, first) from None
             self.instances.append((lay["name"], f))
         self.end = p
 
