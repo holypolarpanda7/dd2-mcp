@@ -628,11 +628,12 @@ def dd2_mesh(action: str = "info", src: str = "", out: str = "", colors: bool = 
 
 
 @mcp.tool()
-def dd2_material(action: str = "scan", pattern: str = "", per_master: int = 3, path: str = "") -> str:
+def dd2_material(action: str = "scan", pattern: str = "", per_master: int = 3, path: str = "", full: bool = False) -> str:
     """Game .mdf2 materials. 'extract': copy the .mdf2 files whose path matches the regex `pattern` out of the paks into
     research/mdf (do this once with pattern '\\.mdf2\\.51$' for all ~13k). 'scan': list the master shaders of the extracted
     materials whose master matches the regex `pattern` (e.g. 'Illusion|Transparent'), with `per_master` example files each (the
-    file shows its material count). 'info': list the materials of one extracted .mdf2 (path)."""
+    file shows its material count). 'info': list the materials of one .mdf2 (path: local, pak or in-game path); full=True also lists every texture slot (index, type, path)
+    and every parameter (index, name, components, default value): the indices are what Mesh:setMaterialTexture / setMaterialFloat / setMaterialFloat4 take in Lua."""
     from . import ree
     if action == "extract":
         return ree.extract(pattern or r"\.mdf2\.51$", "mdf")
@@ -654,7 +655,7 @@ def dd2_material(action: str = "scan", pattern: str = "", per_master: int = 3, p
                     return f"{path}: not a local file and in no pak"
                 local.parent.mkdir(parents=True, exist_ok=True)
                 local.write_bytes(found[1])
-        return ree.run("mdf-info", str(local))
+        return ree.run("mdf-info", str(local), *(["--full"] if full else []))
     return f"unknown action {action!r}"
 
 
