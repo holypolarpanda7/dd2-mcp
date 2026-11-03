@@ -1,6 +1,6 @@
 # Persistent window-control helper: one PowerShell process serves many requests over stdin, so the
 # ~0.45 s PowerShell start + Add-Type compile is paid once. One request per line, one reply per line:
-#   foreground | focus <hwnd> | focusgame | focusproc <name> | key <scan> [holdMs] | rect <name> | mouse <x> <y> | click <x> <y>
+#   foreground | focus <hwnd> | focusgame | focusproc <name> | key <scan> [holdMs] | rect <name> | mouse <x> <y> | click <x> <y> | pan <dx> <dy>
 # (screen pixels). focusproc fronts a process's main window (e.g. Modmanager for Fluffy) and returns its handle.
 # The Alt tap lets SetForegroundWindow through Windows' focus-stealing rules.
 Add-Type @"
@@ -18,6 +18,9 @@ public class W {
   public static void Click(int x, int y) {
     SetCursorPos(x, y); System.Threading.Thread.Sleep(40);
     mouse_event(0x2, 0, 0, 0, UIntPtr.Zero); System.Threading.Thread.Sleep(50); mouse_event(0x4, 0, 0, 0, UIntPtr.Zero);
+  }
+  public static void Pan(int dx, int dy, int steps) {   // relative mouse movement in small steps (camera look)
+    for (int i = 0; i < steps; i++) { mouse_event(0x1, dx / steps, dy / steps, 0, UIntPtr.Zero); System.Threading.Thread.Sleep(8); }
   }
   public static bool Front(IntPtr h) {
     if (IsIconic(h)) ShowWindow(h, 9);
@@ -57,6 +60,7 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
         if (-not $p) { $r = "no window for $($a[1])" } else { $rc = New-Object W+RECT; [void][W]::GetWindowRect($p.MainWindowHandle, [ref]$rc); $r = "$($rc.L) $($rc.T) $($rc.R) $($rc.B)" }
       }
       "mouse" { [void][W]::SetCursorPos([int]$a[1], [int]$a[2]); $r = "mouse $($a[1]) $($a[2])" }
+      "pan" { [W]::Pan([int]$a[1], [int]$a[2], 20); $r = "panned $($a[1]) $($a[2])" }
       "click" { [W]::Click([int]$a[1], [int]$a[2]); $r = "clicked $($a[1]) $($a[2])" }
       "key" { $hold = if ($a.Length -gt 2) { [int]$a[2] } else { 60 }; [W]::Key([byte][int]$a[1], $hold); $r = "sent scan $($a[1])" }
       default { $r = "unknown $($a[0])" }

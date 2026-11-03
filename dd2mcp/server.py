@@ -128,6 +128,62 @@ def dd2_find(type_name: str, limit: int = 25, name: str = "", inspect_nearest: b
 
 
 @mcp.tool()
+def dd2_wwise(action: str = "banks", bank: str = "", id: int = 0, out: str = "") -> str:
+    """Wwise sound introspection (no game needed; see dd2mcp/wwise.py for the DD2 layout: `<name>_es.sbnk` = event structure only, `<name>_m.sbnk` =
+    the audio, and the `_m` companions are not in the community file list). Actions:
+      'banks'   list the `_es` banks of the community list with whether their `_m` companion exists and its media count (bank = regex filter).
+      'event'   bank = stem (e.g. 'mgc_skill'), id = HIRC event id (the `_EventId` of a soundlib.SoundTriggerInfo; dd2_eval can read it):
+                everything the event plays (actions -> containers -> sounds), each media id, codec, size and the `_m` bank + offset it lives in,
+                and which other events share those media.
+      'extract' bank = stem, id = media id, out = directory: writes <id>.wem (Wwise Vorbis / PCM; convert with vgmstream to hear or edit it).
+    Editing helpers for scripts: wwise.pcm_wem / rebuild_media_bank / patch_sound_source."""
+    from . import pak, wwise
+    import pathlib as _p
+    if action == "banks":
+        rows = []
+        for n in pak.search_list(r"natives/stm/sound/wwise/[^/]*_es\.sbnk\.1\.x64$", 2000):
+            if bank and not re.search(bank, n):
+                continue
+            m = wwise.read_bank(wwise.bank_path(n, "m"))
+            rows.append(f"{n.split('/')[-1]}: " + (f"_m companion {len(m) // 1024} KB, {len(wwise.media_index(m))} media" if m else "no _m companion"))
+        return "\n".join(rows[:200]) or "no match"
+    if action == "event":
+        es = wwise.read_bank(bank)
+        if es is None:
+            return f"bank {bank!r} not found ({wwise.bank_path(bank)})"
+        objs = wwise.hirc(es)
+        rows = wwise.resolve(id, objs)
+        if not rows:
+            return f"event {id} is not in {bank} ({len(objs)} objects)"
+        lines = [f"event {id} in {wwise.bank_path(bank)} (bank id {wwise.bank_id(es)}):"]
+        for r in rows:
+            line = "  " + " -> ".join(str(x) for x in r["path"]) + f": {r['type']}"
+            if r.get("media"):
+                loc = wwise.locate_media(r["media"], bank)
+                if loc:
+                    wem = wwise.media_bytes(loc[1], r["media"])
+                    info = wwise.wem_info(wem)
+                    line += f" media {r['media']} plugin {r.get('plugin')} stream {r.get('stream')}: {info['codec']} {info['channels']}ch {info['rate']} Hz {info['bytes']} B in {loc[0].split('/')[-1]} @ DATA+{loc[2]}"
+                else:
+                    line += f" media {r['media']} NOT FOUND in any `_m` bank"
+            lines.append(line)
+        media = {r["media"] for r in rows if r.get("media")}
+        others = [e for e, (t, b, _) in objs.items() if t == 4 and e != id and media & {r2["media"] for r2 in wwise.resolve(e, objs) if r2.get("media")}]
+        lines.append(f"  other events using these media: {others or 'none'}")
+        return "\n".join(lines)
+    if action == "extract":
+        loc = wwise.locate_media(id, bank or None)
+        if not loc:
+            return f"media {id} not found"
+        wem = wwise.media_bytes(loc[1], id)
+        d = _p.Path(out or "research/extract/wwise")
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"{id}.wem").write_bytes(wem)
+        return f"wrote {d / f'{id}.wem'} ({len(wem)} bytes, {wwise.wem_info(wem)['codec']}) from {loc[0]}"
+    return "actions: banks | event | extract"
+
+
+@mcp.tool()
 def dd2_trace(type_name: str, method: str, seconds: float = 5.0, samples: int = 12) -> str:
     """Count and sample calls to a game method over `seconds` of play (every overload of that name, read-only hook).
     Returns call counts and the first `samples` calls (this-type and arguments). Use it to learn WHICH functions the

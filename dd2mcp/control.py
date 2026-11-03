@@ -65,6 +65,11 @@ def key(scan: int, hold_ms: int | None = None) -> str:
     return win(f"key {scan} {hold_ms}" if hold_ms else f"key {scan}")
 
 
+def pan(dx: int, dy: int = 0) -> str:
+    """Turn the in-game camera with relative mouse movement (dx > 0 = look right, dy > 0 = look down; ~ 1 count per pixel of sensitivity)."""
+    return win(f"pan {dx} {dy}")
+
+
 def take_control(unpause: bool = True) -> str:
     if not game.running():
         return "game not running"
