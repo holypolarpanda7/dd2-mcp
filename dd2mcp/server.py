@@ -58,6 +58,7 @@ def dd2_types(type_name: str, kind: str = "methods", filter: str | None = None) 
 _RESOLVE_LUA = r"""
 local function R(expr)
   if expr:match("^[%w_.]+$") then
+    if rawget(_G, expr) ~= nil then return rawget(_G, expr) end   -- a Lua global wins over a singleton of that name
     local o = sdk.get_managed_singleton(expr)
     if not o then error("no managed singleton " .. expr .. " (use a Lua expression for anything else)") end
     return o
