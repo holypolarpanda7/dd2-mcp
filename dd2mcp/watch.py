@@ -12,8 +12,8 @@ import shutil
 from . import game
 
 LUA_DIR = pathlib.Path(__file__).parent / "lua"
-MODULES = ("dd2mcp_watch.lua", "dd2mcp_watch_ai.lua", "dd2mcp_watch_input.lua", "dd2mcp_watch_world.lua")
-STREAMS = ("meta", "state", "node", "snap", "key", "damage", "skill", "gui", "item", "inventory", "hook", "errors", "ai", "input", "order", "world")
+MODULES = ("dd2mcp_watch.lua", "dd2mcp_watch_ai.lua", "dd2mcp_watch_input.lua", "dd2mcp_watch_world.lua", "dd2mcp_watch_talk.lua")
+STREAMS = ("meta", "state", "node", "snap", "key", "damage", "skill", "gui", "item", "inventory", "hook", "errors", "ai", "input", "order", "world", "talk")
 
 
 def install() -> str:
