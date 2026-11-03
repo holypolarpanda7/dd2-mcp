@@ -1151,6 +1151,31 @@ def dd2_god(on: bool = True) -> str:
     return game.format_result(game.eval_lua(f"return D.god({'true' if on else 'false'})"))
 
 
+@mcp.tool()
+def dd2_watch(action: str = "sessions", session: str = "", stream: str = "node", n: int = 30) -> str:
+    """The in-game WATCHER (dd2mcp/lua/dd2mcp_watch.lua): read-only observation of real play, written as JSON lines to reframework/data/dd2mcp/watch_<session>_<stream>.jsonl.
+    Streams: meta, state (1 Hz: player pos/job/play time/node), node (action-node changes of the player, pawns and enemies within 60 m), snap (2 s snapshots),
+    key (keyboard/mouse), damage (every calcDamageValue: victim, damage, type, element), skill (job selector requests + custom skill id -> action), gui (windows
+    opened/closed), item (inventory changes), inventory (one-time field dumps of the player/pawn/enemies: where AI state lives), hook (extra hooks from
+    reframework/data/dd2mcp/watch_hooks.txt, 'type::method signature' per line), errors.
+    Actions: 'install' / 'uninstall' (autorun script; takes effect at the next game start), 'sessions', 'summary' (session '' = latest), 'tail' (session, stream, n)."""
+    from . import watch
+    if action == "install":
+        return watch.install()
+    if action == "uninstall":
+        return watch.uninstall()
+    if action == "sessions":
+        return watch.sessions()
+    sess = session or watch.latest()
+    if not sess:
+        return "no watcher sessions yet"
+    if action == "summary":
+        return watch.summary(sess)
+    if action == "tail":
+        return watch.tail(sess, stream, n)
+    return "action: install | uninstall | sessions | summary | tail"
+
+
 _SPAWN_LOAD = 'local S = loadfile("D:/DD2Modding/dd2-mcp/dd2mcp/lua/spawnlib.lua")()\n'
 _CATS = {"monster": 3, "enemy": 3, "pawn": 1, "straypawn": 2, "npc": 4}
 
