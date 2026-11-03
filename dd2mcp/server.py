@@ -206,6 +206,51 @@ def dd2_where(type_name: str = "", path: str = "", action: str = "search", limit
 
 
 @mcp.tool()
+def dd2_skeleton(action: str = "info", path: str = "", out: str = "", bones: str = "") -> str:
+    """DD2 .skeleton files ('skln' v8, the skeleton resource for via.motion.DummySkeleton / CustomSkeleton; 27 in the game: ragdoll push bodies,
+    look-at rigs, gimmick props). Format decoded 2026-11-02, round-trips byte-exact on all 27. 'info': print the bone tree of a pak path or local
+    file (name, parent, translation, rotation). 'author': write a new .skeleton to `out` from `bones` = JSON list of
+    {"name","parent"(index, -1 root),"t":[x,y,z],"q":[x,y,z,w]} (parents must come before children). 'roundtrip': read + rewrite `path`, report if
+    identical. Bone names must match the mesh's bone names (hash = murmur3 of the UTF-16 name)."""
+    import json as _json
+    import pathlib as _p
+    from . import pak, skeleton
+    def load():
+        if _p.Path(path).exists():
+            return _p.Path(path).read_bytes()
+        f = pak.find(path)
+        return f[1] if f else None
+    if action in ("info", "roundtrip"):
+        data = load()
+        if data is None:
+            return f"{path}: not a local file and in no pak"
+        bs = skeleton.read(data)
+        if action == "roundtrip":
+            return "identical" if skeleton.write(bs) == data else "DIFFERENT"
+        depth = {}
+        lines = []
+        for i, b in enumerate(bs):
+            depth[i] = 0 if b.parent < 0 else depth[b.parent] + 1
+            lines.append(f"{'  ' * depth[i]}[{i}] {b.name}  t=({b.t[0]:.3f},{b.t[1]:.3f},{b.t[2]:.3f}) q=({b.q[0]:.3f},{b.q[1]:.3f},{b.q[2]:.3f},{b.q[3]:.3f})")
+        return f"{len(bs)} bones\n" + "\n".join(lines)
+    if action == "author":
+        if not (bones and out):
+            return "author needs bones (JSON) and out (file path)"
+        spec = _json.loads(bones)
+        bs = []
+        for i, d in enumerate(spec):
+            par = d.get("parent", -1)
+            if par >= i:
+                return f"bone {i} {d['name']!r}: parent {par} must come before it"
+            bs.append(skeleton.Bone(d["name"], par, -1, tuple(d.get("t", (0, 0, 0))) + (1.0,), tuple(d.get("q", (0, 0, 0, 1)))))
+        data = skeleton.write(bs)
+        _p.Path(out).parent.mkdir(parents=True, exist_ok=True)
+        _p.Path(out).write_bytes(data)
+        return f"wrote {out} ({len(data)} bytes, {len(bs)} bones); pak it as natives/stm/<path>.skeleton.8"
+    return "actions: info, author, roundtrip"
+
+
+@mcp.tool()
 def dd2_enum(type_name: str) -> str:
     """Every named value of an enum type, sorted by value (e.g. 'app.Character.JobEnum', 'app.WeaponID')."""
     res = game.eval_lua(f"for _, e in ipairs(D.enum({json.dumps(type_name)})) do print(e.value, e.name) end", timeout=30)
