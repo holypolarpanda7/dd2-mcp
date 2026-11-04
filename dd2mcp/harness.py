@@ -127,8 +127,10 @@ def _boot_and_start(slot: int, log: list) -> dict | None:
     # Calling MainFlowManager.requestStartType ourselves throws (it needs title-UI state) and crashed the game
     # once from the update phase; forcing Phase.RequestLoadData hangs at StartLoad. So point the unit's
     # "latest save" at the slot type and confirm the title's default first item, Load from Last Saved Data.
+    # setLatestSaveSlotNum takes the ABSOLUTE slot (unit * 5 + type): slot 6 sets unit 1's latest to type 1, and passing the bare type
+    # would change unit 0's instead (found 2026-11-04). The getter takes the unit and returns the type.
     latest = _eval('local g = sdk.get_managed_singleton("app.GameSystem") '
-                   f'D.call(g, "setLatestSaveSlotNum(System.Int32)", {slot % 5}) '
+                   f'D.call(g, "setLatestSaveSlotNum(System.Int32)", {slot}) '
                    f'return g:call("getLatestSaveSlotNum(System.Int32)", {slot // 5})')
     if latest != slot % 5:
         log.append(f"could not point the latest save at slot type {slot % 5} (got {latest})")
