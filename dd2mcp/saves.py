@@ -70,7 +70,7 @@ def restore(name: str) -> str:
 # Deleting a file outside the game does not stick: Steam Cloud downloads it again.
 SCENARIOS = BACKUPS / "scenarios"
 SLOT_TYPES = ["Auto", "Manual (Last Inn Rest)", "Back (unmoored-world restart)", "Clear", "AddAuto"]
-TEST_UNITS = {int(u) for u in os.environ.get("DD2_TEST_UNITS", "0").split(",")}
+TEST_UNITS = {int(u) for u in os.environ.get("DD2_TEST_UNITS", "1").split(",")}
 
 
 def slot_file(slot: int) -> str:

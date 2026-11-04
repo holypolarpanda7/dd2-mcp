@@ -1118,7 +1118,7 @@ def dd2_saves(action: str = "list", name: str | None = None) -> str:
 @mcp.tool()
 def dd2_scenario(action: str = "list", name: str | None = None, slot: int | None = None,
                  area: str = "", notes: str = "", restart: bool = False, deploy: list[str] | None = None) -> str:
-    """Test-harness save scenarios (single slots of the test character unit, default unit 0 = slots 0-4).
+    """Test-harness save scenarios (single slots of the test character unit, default unit 1 = slots 5-9).
     action: 'list'; 'shelve' (name, slot, optional area/notes) archives a live slot; 'unshelve' (name) puts it
     back into its own slot (game must be closed); 'load' (name, restart) does it all: quits DD2 if restart=true,
     unshelves, launches, arms the save guard, passes the boot screens, starts the slot and verifies the play time.
@@ -1357,7 +1357,7 @@ def dd2_warp(action: str = "list", target: str = "", count: int = 8, wait: float
 
 @mcp.tool()
 def dd2_saveguard(action: str = "status", autosave: bool = False, units: list[int] | None = None) -> str:
-    """Bridge save guard. 'arm' refuses every save outside the test units (default [0]) and, unless
+    """Bridge save guard. 'arm' refuses every save outside the test units (default [1]) and, unless
     autosave=True, every save to an Auto/AddAuto slot (the game also saves slot 0 on load). 'disarm', 'status'.
     Arm before loading a scenario so the load-time autosave cannot overwrite it. Resets on game restart."""
     if action == "arm":
