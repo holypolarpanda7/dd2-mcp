@@ -81,7 +81,7 @@ def summary(session: str) -> str:
     lines = [f"session {session}"]
     st = read(session, "state")
     if st:
-        lines.append(f"  play {st[0].get('play')}..{st[-1].get('play')} s, {len(st)} heartbeats, jobs seen {sorted({r.get('job') for r in st if r.get('job') is not None})}")
+        lines.append(f"  session {st[0].get('t')}..{st[-1].get('t')} s, {len(st)} heartbeats, jobs seen {sorted({r.get('job') for r in st if r.get('job') is not None})}")
     node = read(session, "node")
     by = collections.defaultdict(collections.Counter)
     for r in node:

@@ -258,14 +258,16 @@ local function heartbeat(list, pnode)
         if okj then row.job = job end
     end
     local tm = singleton("app.TimeManager")
-    if tm then local ok, v = pcall(function() return tm:call("get_WholePlayTime") end) if ok then row.play = v end end
+    if tm then local ok, v = pcall(function() return tm:call("get_WholePlayTime") end) if ok and type(v) == "number" and v > 0 then row.play = v end end
     local ok, pst = pcall(function() return singleton("app.PauseManager") ~= nil end)
     emit("state", row)
 end
 
 local function poll_gui(now)
     local scene = sdk.call_native_func(sdk.get_native_singleton("via.SceneManager"), sdk.find_type_definition("via.SceneManager"), "get_CurrentScene")
-    local arr = scene:call("findComponents(System.Type)", sdk.typeof("via.gui.GUI")):get_elements()
+    local found = scene and scene:call("findComponents(System.Type)", sdk.typeof("via.gui.GUI"))
+    local okA, arr = pcall(function() return found:get_elements() end)
+    if not okA or not arr then return end
     local now_on = {}
     for _, c in ipairs(arr) do
         local ok, en = pcall(function() return c:call("get_Enabled") end)
