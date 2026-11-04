@@ -479,7 +479,7 @@ function SG.arm(opts)
     SG.armed = true
     SG.autosave = opts.autosave == true
     SG.units = {}
-    for _, u in ipairs(opts.units or { 0 }) do SG.units[u] = true end
+    for _, u in ipairs(opts.units or { 1 }) do SG.units[u] = true end
     return SG.status()
 end
 

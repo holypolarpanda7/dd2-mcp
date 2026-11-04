@@ -128,6 +128,64 @@ def dd2_find(type_name: str, limit: int = 25, name: str = "", inspect_nearest: b
 
 
 @mcp.tool()
+def dd2_wwise(action: str = "banks", bank: str = "", id: int = 0, out: str = "") -> str:
+    """Wwise sound introspection (no game needed; see dd2mcp/wwise.py for the DD2 layout: `<name>_es.sbnk` = event structure only, `<name>_m.sbnk` =
+    the audio, and the `_m` companions are not in the community file list). Actions:
+      'banks'   list the `_es` banks of the community list with whether their `_m` companion exists and its media count (bank = regex filter).
+      'event'   bank = stem (e.g. 'mgc_skill'), id = HIRC event id (the `_EventId` of a soundlib.SoundTriggerInfo; dd2_eval can read it):
+                everything the event plays (actions -> containers -> sounds), each media id, codec, size and the `_m` bank + offset it lives in,
+                and which other events share those media.
+      'extract' bank = stem, id = media id, out = directory: writes <id>.wem (Wwise Vorbis / PCM; convert with vgmstream to hear or edit it).
+    Editing helpers for scripts: wwise.build_layered_banks (new es+m pair whose event plays game sounds with a Pitch property) / rebuild_media_bank /
+    patch_sound_source. PCM WEM sources are SILENTLY DROPPED by the game's engine: reuse game Vorbis media and edit with sound properties.
+    Getting a custom bank to play in game (the engine loads banks only from deserialized .user data, not sdk.create_resource): docs/wwise-custom-banks.md."""
+    from . import pak, wwise
+    import pathlib as _p
+    if action == "banks":
+        rows = []
+        for n in pak.search_list(r"natives/stm/sound/wwise/[^/]*_es\.sbnk\.1\.x64$", 2000):
+            if bank and not re.search(bank, n):
+                continue
+            m = wwise.read_bank(wwise.bank_path(n, "m"))
+            rows.append(f"{n.split('/')[-1]}: " + (f"_m companion {len(m) // 1024} KB, {len(wwise.media_index(m))} media" if m else "no _m companion"))
+        return "\n".join(rows[:200]) or "no match"
+    if action == "event":
+        es = wwise.read_bank(bank)
+        if es is None:
+            return f"bank {bank!r} not found ({wwise.bank_path(bank)})"
+        objs = wwise.hirc(es)
+        rows = wwise.resolve(id, objs)
+        if not rows:
+            return f"event {id} is not in {bank} ({len(objs)} objects)"
+        lines = [f"event {id} in {wwise.bank_path(bank)} (bank id {wwise.bank_id(es)}):"]
+        for r in rows:
+            line = "  " + " -> ".join(str(x) for x in r["path"]) + f": {r['type']}"
+            if r.get("media"):
+                loc = wwise.locate_media(r["media"], bank)
+                if loc:
+                    wem = wwise.media_bytes(loc[1], r["media"])
+                    info = wwise.wem_info(wem)
+                    line += f" media {r['media']} plugin {r.get('plugin')} stream {r.get('stream')}: {info['codec']} {info['channels']}ch {info['rate']} Hz {info['bytes']} B in {loc[0].split('/')[-1]} @ DATA+{loc[2]}"
+                else:
+                    line += f" media {r['media']} NOT FOUND in any `_m` bank"
+            lines.append(line)
+        media = {r["media"] for r in rows if r.get("media")}
+        others = [e for e, (t, b, _) in objs.items() if t == 4 and e != id and media & {r2["media"] for r2 in wwise.resolve(e, objs) if r2.get("media")}]
+        lines.append(f"  other events using these media: {others or 'none'}")
+        return "\n".join(lines)
+    if action == "extract":
+        loc = wwise.locate_media(id, bank or None)
+        if not loc:
+            return f"media {id} not found"
+        wem = wwise.media_bytes(loc[1], id)
+        d = _p.Path(out or "research/extract/wwise")
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"{id}.wem").write_bytes(wem)
+        return f"wrote {d / f'{id}.wem'} ({len(wem)} bytes, {wwise.wem_info(wem)['codec']}) from {loc[0]}"
+    return "actions: banks | event | extract"
+
+
+@mcp.tool()
 def dd2_trace(type_name: str, method: str, seconds: float = 5.0, samples: int = 12) -> str:
     """Count and sample calls to a game method over `seconds` of play (every overload of that name, read-only hook).
     Returns call counts and the first `samples` calls (this-type and arguments). Use it to learn WHICH functions the
@@ -1060,7 +1118,7 @@ def dd2_saves(action: str = "list", name: str | None = None) -> str:
 @mcp.tool()
 def dd2_scenario(action: str = "list", name: str | None = None, slot: int | None = None,
                  area: str = "", notes: str = "", restart: bool = False, deploy: list[str] | None = None) -> str:
-    """Test-harness save scenarios (single slots of the test character unit, default unit 0 = slots 0-4).
+    """Test-harness save scenarios (single slots of the test character unit, default unit 1 = slots 5-9).
     action: 'list'; 'shelve' (name, slot, optional area/notes) archives a live slot; 'unshelve' (name) puts it
     back into its own slot (game must be closed); 'load' (name, restart) does it all: quits DD2 if restart=true,
     unshelves, launches, arms the save guard, passes the boot screens, starts the slot and verifies the play time.
@@ -1091,6 +1149,88 @@ def dd2_god(on: bool = True) -> str:
     every frame. Knockback still happens. Resets on game restart. Use it for any combat test: enemies killed the
     test character within seconds several times (2026-10-31)."""
     return game.format_result(game.eval_lua(f"return D.god({'true' if on else 'false'})"))
+
+
+@mcp.tool()
+def dd2_watch(action: str = "sessions", session: str = "", stream: str = "node", n: int = 30) -> str:
+    """The in-game WATCHER (dd2mcp/lua/dd2mcp_watch.lua): read-only observation of real play, written as JSON lines to reframework/data/dd2mcp/watch_<session>_<stream>.jsonl.
+    Streams: meta, state (1 Hz: player pos/job/play time/node), node (action-node changes of the player, pawns and enemies within 60 m), snap (2 s snapshots),
+    key (keyboard/mouse), damage (every calcDamageValue: victim, damage, type, element), skill (job selector requests + custom skill id -> action), gui (windows
+    opened/closed), item (inventory changes), inventory (one-time field dumps of the player/pawn/enemies: where AI state lives), hook (extra hooks from
+    reframework/data/dd2mcp/watch_hooks.txt, 'type::method signature' per line), errors.
+    Actions: 'install' / 'uninstall' (autorun script; takes effect at the next game start), 'sessions', 'summary' (session '' = latest), 'tail' (session, stream, n)."""
+    from . import watch
+    if action == "install":
+        return watch.install()
+    if action == "uninstall":
+        return watch.uninstall()
+    if action == "sessions":
+        return watch.sessions()
+    sess = session or watch.latest()
+    if not sess:
+        return "no watcher sessions yet"
+    if action == "summary":
+        return watch.summary(sess)
+    if action == "tail":
+        return watch.tail(sess, stream, n)
+    return "action: install | uninstall | sessions | summary | tail"
+
+
+_SPAWN_LOAD = 'local S = loadfile("D:/DD2Modding/dd2-mcp/dd2mcp/lua/spawnlib.lua")()\n'
+_CATS = {"monster": 3, "enemy": 3, "pawn": 1, "straypawn": 2, "npc": 4}
+
+
+@mcp.tool()
+def dd2_spawn(action: str = "templates", name: str = "", cat: str = "monster", dx: float = 4.0, dz: float = 0.0, wait: float = 40.0, near: float = 25.0) -> str:
+    """Spawn / despawn game characters through the game's own GenerateManager (dd2mcp/lua/spawnlib.lua; verified 2026-11-03 for MONSTERS).
+    Needs the game focused and running a loaded save (spawning is asynchronous: the instance appears 8-20 s after the request).
+      'templates' list the character names you can spawn in `cat` (only characters the loaded world has a saved request for: the request is cloned).
+      'spawn'     name = e.g. 'ch221000_00' (goblin), dx/dz = metres from the player (east / south). One-shot (no regenerate, no re-save). Waits up to
+                  `wait` s for the instance and reports its name and distance (it may wander: AI active).
+      'despawn'   name (or '' = every monster instance within `near` m of the player except the player party): removes it for good.
+      'list'      instances of `name` (or all monsters within `near` m) with distances.
+    cat: monster (default) | straypawn | pawn. PAWN: the main pawn instance can be created but its position is not controlled yet; NPC: no stored
+    requests (NPCs use other tables) - not solved. Freeze the camp's existing enemies first (tests/spawn_lab_setup.py) and turn god mode on (dd2_god)."""
+    import time as _t
+    c = _CATS.get(cat.lower())
+    if c is None:
+        return "cat must be one of " + ", ".join(_CATS)
+    def run(code, phase="frame"):
+        r = game.eval_lua(_SPAWN_LOAD + code, phase=phase)
+        return (r.get("ret") or [None])[0] if r.get("ok") else "ERR " + str(r.get("err"))
+    if action == "templates":
+        return str(run(f"local seen, n = {{}}, {{}} for _, t in ipairs(S.templates({c})) do if not seen[t.name] then seen[t.name] = 1 n[#n+1] = t.name end end table.sort(n) return table.concat(n, ' ')"))
+    cid = f"(function() for _, t in ipairs(S.templates({c})) do if t.name == {name!r} then return t.id end end end)()"
+    listing = ("local u = D.player_pos() local rows = {} local function add(inf) local go = inf:get_field('<Instance>k__BackingField') if go then "
+               "local p = go:get_Transform():get_Position() rows[#rows+1] = go:get_Name() .. string.format(' d=%.1f', math.sqrt((p.x-u.x)^2 + (p.z-u.z)^2)) end end ")
+    if action == "list":
+        if name:
+            return str(run(f"{listing} local id = {cid} if not id then return 'unknown name (see templates)' end for _, i in ipairs(S.list({c}, id)) do add(i) end return table.concat(rows, ', ')"))
+        return str(run(f"{listing} local l = S.iim():call('getInstanceInfoList(app.GeneratorCategory)', {c}) for i = 0, l:call('get_Count') - 1 do add(l:call('get_Item', i)) end table.sort(rows) return table.concat(rows, ', ')"))
+    if action == "spawn":
+        if not name:
+            return "name required (see templates)"
+        before = str(run(f"local id = {cid} if not id then return 'ERR' end local n = {{}} for _, i in ipairs(S.list({c}, id)) do n[#n+1] = i:get_field('<Instance>k__BackingField'):get_Name() end return table.concat(n, ',')"))
+        if before.startswith("ERR"):
+            return "unknown name for this category (see templates)"
+        known = set(x for x in before.split(",") if x)
+        r = run(f"local id = {cid} local ctrl, why = S.spawn({c}, id, {dx}, {dz}, 7) return ctrl and 'requested' or tostring(why)", phase="update")
+        if r != "requested":
+            return f"spawn failed: {r}"
+        deadline = _t.time() + wait
+        while _t.time() < deadline:
+            _t.sleep(2.5)
+            now = str(run(f"{listing} local id = {cid} for _, i in ipairs(S.list({c}, id)) do add(i) end return table.concat(rows, ',')"))
+            fresh = [x for x in now.split(",") if x and x.split(" ")[0] not in known]
+            if fresh:
+                return "spawned: " + ", ".join(fresh)
+        return f"requested, but no new instance within {wait:.0f} s"
+    if action == "despawn":
+        sel = (f"local id = {cid} if not id then return 'unknown name' end local list = S.list({c}, id)" if name else
+               f"local list = {{}} local l = S.iim():call('getInstanceInfoList(app.GeneratorCategory)', {c}) for i = 0, l:call('get_Count') - 1 do list[#list+1] = l:call('get_Item', i) end")
+        return str(run(f"{sel} local u = D.player_pos() local n = 0 for _, i in ipairs(list) do local go = i:get_field('<Instance>k__BackingField') if go then "
+                       f"local p = go:get_Transform():get_Position() if math.sqrt((p.x-u.x)^2 + (p.z-u.z)^2) <= {near} then S.despawn({c}, i) n = n + 1 end end end return 'despawn requested for ' .. n", phase="update"))
+    return "action: templates | spawn | despawn | list"
 
 
 _ENEMIES_LUA = r"""
@@ -1217,7 +1357,7 @@ def dd2_warp(action: str = "list", target: str = "", count: int = 8, wait: float
 
 @mcp.tool()
 def dd2_saveguard(action: str = "status", autosave: bool = False, units: list[int] | None = None) -> str:
-    """Bridge save guard. 'arm' refuses every save outside the test units (default [0]) and, unless
+    """Bridge save guard. 'arm' refuses every save outside the test units (default [1]) and, unless
     autosave=True, every save to an Auto/AddAuto slot (the game also saves slot 0 on load). 'disarm', 'status'.
     Arm before loading a scenario so the load-time autosave cannot overwrite it. Resets on game restart."""
     if action == "arm":

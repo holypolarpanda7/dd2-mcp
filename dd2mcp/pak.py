@@ -202,13 +202,20 @@ def write_pak(files: dict[str, bytes], out: pathlib.Path) -> pathlib.Path:
     """Plain pak (version 4.0, no feature flags: no encryption, no compression) holding `files` by path.
     Mod paks loaded as re_chunk_000.pak.patch_NNN.pak override the same paths in earlier paks."""
     items = sorted(files.items())
-    data_off = 16 + 48 * len(items)
+    data_off = (16 + 48 * len(items) + 0xFFF) & ~0xFFF
+
+    def align(path):   # Wwise banks are read in place and need aligned data (an unaligned bank crashed the game at start, 2026-11-03); the rest only 16
+        return 0x1000 if "/sound/wwise/" in path else 16
     table, blobs, off = bytearray(), bytearray(), data_off
     for path, blob in items:
+        pad = (-off) % align(path)
+        blobs += b"\0" * pad
+        off += pad
         lo, up = path_hash(path)
         table += struct.pack("<IIQQQqQ", lo, up, off, len(blob), len(blob), 0, 0)
         blobs += blob
         off += len(blob)
+    table += b"\0" * (data_off - 16 - len(table))   # keep the header + table padded up to the first blob
     out = pathlib.Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_bytes(struct.pack("<4sBBHII", b"KPKA", 4, 0, 0, len(items), 0) + table + blobs)

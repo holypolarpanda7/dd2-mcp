@@ -114,9 +114,11 @@ def type_info(name: str, limit: int = 80) -> str:
             return "ambiguous or unknown: " + ", ".join(sorted(cand)[:15]) if cand else f"no type {name}"
         exact = cand[0]
     out = [f"{exact}   [{domain(exact)}]"]
-    chain, p = [], exact
-    while p in c["parent"]:
-        p = c["parent"][p]
+    # the IL2CPP subclass tree lists some types as their own parent (via.behaviortree.Action, via.Behavior, ...),
+    # so walk with a seen set: an unguarded loop grows `chain` until the machine runs out of memory
+    chain, p, seen = [], exact, {exact}
+    while (p := c["parent"].get(p)) is not None and p not in seen:
+        seen.add(p)
         chain.append(p)
     if chain:
         out.append("parents: " + " > ".join(chain))
