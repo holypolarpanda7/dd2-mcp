@@ -1,6 +1,6 @@
 # Persistent window-control helper: one PowerShell process serves many requests over stdin, so the
 # ~0.45 s PowerShell start + Add-Type compile is paid once. One request per line, one reply per line:
-#   foreground | focus <hwnd> | focusgame | focusproc <name> | key <scan> [holdMs] | rect <name> | mouse <x> <y> | click <x> <y> | holdl <ms> | holdr <ms> | pan <dx> <dy>
+#   foreground | focus <hwnd> | focusgame | focusproc <name> | key <scan> [holdMs] | down <l|r|scan> | up <l|r|scan> | rect <name> | mouse <x> <y> | click <x> <y> | holdl <ms> | holdr <ms> | pan <dx> <dy>
 # (screen pixels). focusproc fronts a process's main window (e.g. Modmanager for Fluffy) and returns its handle.
 # The Alt tap lets SetForegroundWindow through Windows' focus-stealing rules.
 Add-Type @"
@@ -30,6 +30,16 @@ public class W {
     SetForegroundWindow(h);
     for (int i = 0; i < 40; i++) { if (GetForegroundWindow() == h) return true; System.Threading.Thread.Sleep(10); }
     return false;
+  }
+  public static void Down(string what) {   // press without waiting: l / r mouse button, or a scan code; Up releases it (so inputs can overlap)
+    if (what == "l") mouse_event(0x2, 0, 0, 0, UIntPtr.Zero);
+    else if (what == "r") mouse_event(0x8, 0, 0, 0, UIntPtr.Zero);
+    else keybd_event(0, Byte.Parse(what), 0x8, UIntPtr.Zero);
+  }
+  public static void Up(string what) {
+    if (what == "l") mouse_event(0x4, 0, 0, 0, UIntPtr.Zero);
+    else if (what == "r") mouse_event(0x10, 0, 0, 0, UIntPtr.Zero);
+    else keybd_event(0, Byte.Parse(what), 0x8 | 0x2, UIntPtr.Zero);
   }
   public static void Key(byte scan, int holdMs) {
     keybd_event(0, scan, 0x8, UIntPtr.Zero);
@@ -66,6 +76,8 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
       "click" { [W]::Click([int]$a[1], [int]$a[2]); $r = "clicked $($a[1]) $($a[2])" }
       "holdl" { [W]::HoldLeft([int]$a[1]); $r = "held left $($a[1])" }
       "holdr" { [W]::HoldRight([int]$a[1]); $r = "held right $($a[1])" }
+      "down" { [W]::Down($a[1]); $r = "down $($a[1])" }
+      "up" { [W]::Up($a[1]); $r = "up $($a[1])" }
       "key" { $hold = if ($a.Length -gt 2) { [int]$a[2] } else { 60 }; [W]::Key([byte][int]$a[1], $hold); $r = "sent scan $($a[1])" }
       default { $r = "unknown $($a[0])" }
     }
