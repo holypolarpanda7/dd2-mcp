@@ -5,8 +5,8 @@ REFramework or Fluffy itself into <game>/Games/DragonsDogma2/Mods, where Fluffy 
 the mod root and copies everything else relative to the game folder; .pak files at the root are installed as pak mods
 (DD2: into pak_mods, which REFramework's pak loader injects).
 
-Zip layout:  modinfo.ini, [screenshot.png], <Name>.pak (from build/), reframework/** (from src/reframework/, minus
-package.exclude). Metadata comes from <project>/dd2mod.json "package"."""
+Zip layout:  modinfo.ini, [screenshot.png], <Name>.pak (from build/), natives/** (loose files, from build/natives/),
+reframework/** (from src/reframework/, minus package.exclude). Metadata comes from <project>/dd2mod.json "package"."""
 import json
 import pathlib
 import subprocess
@@ -61,6 +61,10 @@ def build(project: str, run_build: bool = True) -> str:
                 entries[rel] = f
     for p in sorted((root / "build").glob("*.pak")):
         entries[p.name] = p
+    nat = root / "build" / "natives"   # loose game files (they skip the pak checksum; need REFramework's Loose File Loader)
+    for f in sorted(nat.rglob("*")) if nat.is_dir() else []:
+        if f.is_file():
+            entries[f.relative_to(root / "build").as_posix()] = f
     if cfg.get("screenshot"):
         shot = root / cfg["screenshot"]
         entries[shot.name] = shot
