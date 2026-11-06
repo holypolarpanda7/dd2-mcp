@@ -198,7 +198,8 @@ def search_list(pattern: str, limit: int = 100) -> list[str]:
     return out
 
 
-def write_pak(files: dict[str, bytes], out: pathlib.Path) -> pathlib.Path:
+def write_pak(files: dict[str, bytes], out: pathlib.Path, attrs: dict[str, int] | None = None,
+              checksums: dict[str, int] | None = None) -> pathlib.Path:
     """Plain pak (version 4.0, no feature flags: no encryption, no compression) holding `files` by path.
     Mod paks loaded as re_chunk_000.pak.patch_NNN.pak override the same paths in earlier paks."""
     items = sorted(files.items())
@@ -212,7 +213,14 @@ def write_pak(files: dict[str, bytes], out: pathlib.Path) -> pathlib.Path:
         blobs += b"\0" * pad
         off += pad
         lo, up = path_hash(path)
-        table += struct.pack("<IIQQQqQ", lo, up, off, len(blob), len(blob), 0, 0)
+        attr = (attrs or {}).get(path, 0)
+        usize = len(blob)
+        if attr & 0xF == 2:     # zstd, as the game stores it
+            import zstandard
+            blob = zstandard.ZstdCompressor(level=3).compress(blob)
+        elif attr & 0xF:
+            raise ValueError(f"compression {attr & 0xF} not supported ({path})")
+        table += struct.pack("<IIQQQqQ", lo, up, off, len(blob), usize, attr, (checksums or {}).get(path, 0))
         blobs += blob
         off += len(blob)
     table += b"\0" * (data_off - 16 - len(table))   # keep the header + table padded up to the first blob

@@ -91,7 +91,13 @@ class MsgFile:
             texts = [text.get(msg.LANGS[l] if l < len(msg.LANGS) else str(l), en) for l in self.langs]
         g = (guid or str(uuid.uuid4())).lower()
         attrs = [0 if t == msg._ATTR_LONG else 0.0 if t == msg._ATTR_DOUBLE else "" for t in self.attr_types]
-        e = WEntry(g, name, texts, attrs, 0)
+        # The u32 after the guid is never 0 and unique per file in all 9807 game entries (meaning unknown); a 0 on every
+        # added entry crashed the game at boot (2026-11-06). Derive a stable unique value from the guid.
+        used = {x.crc for x in self.entries}
+        crc = murmur3(uuid.UUID(g).bytes_le)
+        while crc == 0 or crc in used:
+            crc = (crc * 0x9E3779B1 + 1) & 0xFFFFFFFF
+        e = WEntry(g, name, texts, attrs, crc)
         self.entries.append(e)
         return e
 

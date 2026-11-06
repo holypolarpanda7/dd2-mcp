@@ -120,11 +120,59 @@ def crash_info() -> str | None:
     return None
 
 
-def launch() -> str:
+def window_titles_ps(proc: str) -> str:
+    """PowerShell that prints the title of every top-level window owned by the named process."""
+    return ("$p = Get-Process %s -ErrorAction SilentlyContinue; if (-not $p) { exit }; "
+            "Add-Type -Namespace W -Name U -MemberDefinition '"
+            "public delegate bool EP(System.IntPtr h, System.IntPtr l);"
+            "[System.Runtime.InteropServices.DllImport(\"user32.dll\")] public static extern bool EnumWindows(EP f, System.IntPtr l);"
+            "[System.Runtime.InteropServices.DllImport(\"user32.dll\")] public static extern int GetWindowThreadProcessId(System.IntPtr h, out int pid);"
+            "[System.Runtime.InteropServices.DllImport(\"user32.dll\", CharSet=System.Runtime.InteropServices.CharSet.Unicode)]"
+            " public static extern int GetWindowText(System.IntPtr h, System.Text.StringBuilder s, int n);'; "
+            "$ids = @($p | ForEach-Object { $_.Id }); $t = New-Object System.Collections.ArrayList; "
+            "[void][W.U]::EnumWindows({ param($h, $l) $o = 0; [void][W.U]::GetWindowThreadProcessId($h, [ref]$o); "
+            "if ($ids -contains $o) { $sb = New-Object System.Text.StringBuilder 256; [void][W.U]::GetWindowText($h, $sb, 256); "
+            "if ($sb.Length) { [void]$t.Add($sb.ToString()) } }; $true }, [System.IntPtr]::Zero); $t") % proc
+
+
+def crash_dialog() -> str | None:
+    """Title of DD2's crash dialog ("Dragon's Dogma 2 - Crash") if one is open, else None. A crashed game stays in the
+    process list until the dialog is closed, so running() alone can't tell (2026-11-06: a session hung on it)."""
+    # every top-level window of DD2.exe: the dialog is not the process's MainWindowTitle
+    ps = window_titles_ps("DD2")
+    try:
+        out = subprocess.run(["powershell.exe", "-NoProfile", "-Command", ps], capture_output=True, text=True,
+                             timeout=20).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    for line in out.splitlines():
+        if "crash" in line.lower():
+            return line.strip()
+    return None
+
+
+def launch(wait: float = 0) -> str:
+    """Start DD2 through Steam. wait > 0: wait up to that many seconds until the Lua bridge answers (the title
+    screen), returning early with CRASHED if the crash dialog opens or the game exits."""
     if running():
         return f"already running (pid {running()})"
     subprocess.run(["cmd.exe", "/c", "start", "", f"steam://rungameid/{APP_ID}"], capture_output=True)
-    return "launched via Steam; load a save, then dd2_status"
+    if wait <= 0:
+        return "launched via Steam; load a save, then dd2_status"
+    t0 = time.time()
+    seen = False
+    while time.time() - t0 < wait:
+        time.sleep(5)
+        pid = running()
+        seen = seen or bool(pid)
+        title = crash_dialog() if pid else None
+        if title:
+            return f"CRASHED during boot after {time.time() - t0:.0f}s ({title}); dd2_quit closes it"
+        if seen and not pid:
+            return f"CRASHED: the game exited after {time.time() - t0:.0f}s"
+        if pid and eval_lua("return 1", timeout=3).get("ok"):
+            return f"up: bridge answers after {time.time() - t0:.0f}s (pid {pid}); load a save next"
+    return f"timeout after {wait:.0f}s: game {'running, bridge silent' if running() else 'not running'}"
 
 
 def screenshot() -> str:
