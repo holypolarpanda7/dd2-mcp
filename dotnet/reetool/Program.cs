@@ -31,11 +31,80 @@ try {
         "efx-normalize" => EfxNormalizeCmd(args[1], args[2]),
         "efx-info" => EfxInfo(args[1], args.Contains("--all")),
         "efx-scan" => EfxScan(args[1], args.Length > 2 ? args[2] : "", args.Contains("--from") ? int.Parse(args[Array.IndexOf(args, "--from") + 1]) : 0),
+        "pfb-info" => PfbInfo(args[1]),
+        "pfb-addmsg" => PfbAddMsg(args),
+        "user-swap" => UserSwap(args),
         _ => Fail("unknown command " + args[0]),
     };
 } catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
 
 static int Fail(string m) { Console.Error.WriteLine(m); return 2; }
+
+static ReeLib.PfbFile LoadPfb(string path) {
+    var pfb = new ReeLib.PfbFile(Ws().RszFileOption, new FileHandler(path, false));
+    if (!pfb.Read()) throw new Exception("could not read " + path);
+    pfb.SetupGameObjects();
+    return pfb;
+}
+
+static void PrintGo(ReeLib.Pfb.PfbGameObject go, string ind) {
+    Console.WriteLine($"{ind}GO {go.Instance?.Values[0]} components=[{string.Join(", ", go.Components.Select(c => c.RszClass.name))}]");
+    foreach (var c in go.Components)
+        if (c.RszClass.name == "via.gui.AdditionalMessage")
+            Console.WriteLine($"{ind}  MessageList = [{string.Join(", ", ((List<object>)c.Values[0]).Select(x => x?.ToString()))}]");
+    foreach (var ch in go.Children) PrintGo(ch, ind + "  ");
+}
+
+// Print a prefab's game objects, components and resources.
+static int PfbInfo(string path) {
+    var pfb = LoadPfb(path);
+    foreach (var go in pfb.GameObjects) PrintGo(go, "");
+    Console.WriteLine("resources: " + string.Join(", ", pfb.ResourceInfoList.Select(r => r.Path)));
+    return 0;
+}
+
+// Copy a donor .user with every string value equal to <old> (or every *.pfb path when old is "*.pfb") replaced by
+// <new>, then rebuild its resource table. Prints the root class and the strings it changed.
+static int UserSwap(string[] a) {
+    if (a.Length < 5) return Fail("usage: user-swap donor.user out.user <old|*.pfb> <new>");
+    var u = new ReeLib.UserFile(Ws().RszFileOption, new FileHandler(a[1], false));
+    if (!u.Read()) return Fail("could not read " + a[1]);
+    int n = 0;
+    void Walk(object? v, Action<object> set) {
+        if (v is string str && (a[3] == "*.pfb" ? str.EndsWith(".pfb", StringComparison.OrdinalIgnoreCase) : str == a[3])) { Console.WriteLine($"  {str} -> {a[4]}"); set(a[4]); n++; }
+        else if (v is List<object> list) for (int i = 0; i < list.Count; i++) { var k = i; Walk(list[k], x => list[k] = x); }
+    }
+    foreach (var inst in u.RSZ.InstanceList)
+        if (inst?.Values != null)
+            for (int i = 0; i < inst.Values.Length; i++) { var k = i; var target = inst; Walk(inst.Values[k], x => target.Values[k] = x); }
+    Console.WriteLine($"root {u.Instance?.RszClass.name}: {n} value(s) swapped");
+    u.RebuildInfoTable();
+    if (!u.WriteTo(a[2])) return Fail("write failed");
+    var back = new ReeLib.UserFile(Ws().RszFileOption, new FileHandler(a[2], false)); back.Read();
+    Console.WriteLine("resources: " + string.Join(", ", back.ResourceInfoList.Select(r => r.Path)));
+    return 0;
+}
+
+// The game registers extra .msg files through a via.gui.AdditionalMessage component (its MessageList of message
+// resources) found in game data. Make a one-object prefab from a donor: keep its root and Transform, drop the rest,
+// add the component listing our msg paths (e.g. "wizard/text/wizard_text.msg").
+static int PfbAddMsg(string[] a) {
+    if (a.Length < 4) return Fail("usage: pfb-addmsg donor.pfb out.pfb <msg path>...");
+    var pfb = LoadPfb(a[1]);
+    var root = pfb.Root ?? throw new Exception("donor has no root");
+    root.Children.Clear();
+    foreach (var c in root.Components.ToList())
+        if (c.RszClass.name != "via.Transform") root.Components.Remove(c);
+    while (pfb.GameObjects.Count > 1) pfb.GameObjects.RemoveAt(1);
+    if (root.Instance != null && root.Instance.Values[0] is string) root.Instance.Values[0] = "DnDClassesText";   // via.GameObject v0 = name
+    var comp = pfb.RSZ.CreateInstance("via.gui.AdditionalMessage");
+    comp.Values[0] = a.Skip(3).Cast<object>().ToList();
+    pfb.AddComponent(root, comp);
+    pfb.RebuildInfoTables();
+    if (!pfb.WriteTo(a[2])) return Fail("write failed");
+    foreach (var go in LoadPfb(a[2]).GameObjects) PrintGo(go, "");
+    return 0;
+}
 
 static int MeshImport(string[] a) {
     if (a.Length < 3) return Fail("usage: mesh-import in.glb out.mesh [--colors] [--config DD2]");
