@@ -1146,7 +1146,7 @@ def dd2_scenario(action: str = "list", name: str | None = None, slot: int | None
 @mcp.tool()
 def dd2_god(on: bool = True) -> str:
     """Test god mode for the player (bridge 0.8.2+): skips HitController.damageProc and holds IsNoDie/IsDamageZero
-    every frame. Knockback still happens. Resets on game restart. Use it for any combat test: enemies killed the
+    every frame (off clears both). Knockback still happens. Resets on game restart. Use it for any combat test: enemies killed the
     test character within seconds several times (2026-10-31)."""
     return game.format_result(game.eval_lua(f"return D.god({'true' if on else 'false'})"))
 
