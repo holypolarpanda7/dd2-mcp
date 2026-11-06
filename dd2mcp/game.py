@@ -191,7 +191,8 @@ def screenshot() -> str:
 
 
 def deploy(project: str) -> str:
-    """Copy <project>/src/reframework/** into the game's reframework folder (only files the project owns), and
+    """Copy <project>/src/reframework/** into the game's reframework folder (only files the project owns),
+    <project>/build/natives/** into the game folder as loose files (LooseFileLoader switched on), and
     <project>/build/*.pak into <game>/pak_mods (REFramework's IntegrityCheckBypass_LoadPakDirectory injects paks
     from there; a loose re_chunk_000.pak.patch_NNN.pak is ignored, 2026-10-29)."""
     root = pathlib.Path(project)
@@ -220,7 +221,55 @@ def deploy(project: str) -> str:
             out.append("paks -> pak_mods: " + ", ".join(copied) + " (loaded at the next game start)")
         if locked:
             out.append("pak in use by the running game, not replaced: " + ", ".join(locked))
+    loose = _loose_files(root)
+    if loose:
+        for f, rel in loose:
+            dst = GAME / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(f, dst)
+        out.append(f"loose -> game folder: {len(loose)} file(s) under natives/ ({_set_loose_loader(True)})")
     return "\n".join(out)
+
+
+LOOSE_FLAG = "LooseFileLoader_Enabled"
+_LOOSE_STATE = pathlib.Path.home() / ".cache" / "dd2-mcp" / "loose_loader_before.txt"
+
+
+def _loose_files(root: pathlib.Path) -> list[tuple[pathlib.Path, pathlib.Path]]:
+    """<project>/build/natives/** -> (file, path relative to the game folder). Loose files skip the pak checksum that
+    base-game files flagged 0x1000 carry (changing those in a pak crashes DD2 at boot, 2026-11-06); REFramework's
+    LooseFileLoader must be on for the game to read them."""
+    base = root / "build"
+    nat = base / "natives"
+    return [(f, f.relative_to(base)) for f in sorted(nat.rglob("*")) if f.is_file()] if nat.is_dir() else []
+
+
+def _set_loose_loader(on: bool) -> str:
+    """Turn REFramework's LooseFileLoader on for a deploy (remembering the player's setting) or restore it."""
+    cfg = GAME / "re2_fw_config.txt"
+    if not cfg.exists():
+        return "no re2_fw_config.txt yet: enable Loose File Loader in the REFramework menu"
+    text = cfg.read_text()
+    cur = next((l.split("=", 1)[1].strip() for l in text.splitlines() if l.startswith(LOOSE_FLAG + "=")), None)
+    if on:
+        if not _LOOSE_STATE.exists():
+            _LOOSE_STATE.write_text(cur or "absent")
+        want = "true"
+    else:
+        if not _LOOSE_STATE.exists():
+            return f"loader setting left as {cur}"
+        want = _LOOSE_STATE.read_text().strip()
+        _LOOSE_STATE.unlink()
+        if want == "absent":
+            text = "\n".join(l for l in text.splitlines() if not l.startswith(LOOSE_FLAG + "=")) + "\n"
+            cfg.write_text(text)
+            return "loader setting removed again"
+    if cur is None:
+        text = text.rstrip("\n") + f"\n{LOOSE_FLAG}={want}\n"
+    else:
+        text = text.replace(f"{LOOSE_FLAG}={cur}", f"{LOOSE_FLAG}={want}")
+    cfg.write_text(text)
+    return f"Loose File Loader {want}" + (" (was " + _LOOSE_STATE.read_text() + ")" if on and _LOOSE_STATE.exists() else "")
 
 
 def undeploy(project: str) -> str:
@@ -239,6 +288,8 @@ def undeploy(project: str) -> str:
                for f in src.rglob("*") if f.is_file() and not f.name.startswith(".")] if src.is_dir() else []
     if (root / "build").is_dir():
         targets += [(GAME / "pak_mods" / p.name, pathlib.Path("pak_mods") / p.name) for p in (root / "build").glob("*.pak")]
+    loose = _loose_files(root)
+    targets += [(GAME / rel, rel) for _, rel in loose]
     for live, rel in targets:
         if live.exists():
             dst = park / rel
@@ -249,6 +300,12 @@ def undeploy(project: str) -> str:
         # only the mod's own folders (reframework/autorun/wizard), never autorun, data or pak_mods themselves
         if d.is_relative_to(REF) and len(d.relative_to(REF).parts) >= 2 and d.is_dir() and not any(d.iterdir()):
             d.rmdir()
+    if loose:   # empty natives/ folders we created, bottom up (never the game's own content: it has none loose)
+        for d in sorted({p for _, rel in loose for p in (GAME / rel).parents if p.is_relative_to(GAME / "natives")},
+                        key=lambda x: -len(x.parts)):
+            if d.is_dir() and not any(d.iterdir()):
+                d.rmdir()
+        moved.append(_set_loose_loader(False))
     return f"moved {len(moved)} files to {park}" + "".join(f"\n  {m}" for m in moved) if moved else "nothing deployed"
 
 
