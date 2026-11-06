@@ -32,7 +32,10 @@ def dd2_status() -> str:
     crash = game.crash_info()
     if crash:
         lines.append("CRASH in the last run's log:\n" + crash)
-    if pid:
+    dialog = game.crash_dialog() if pid else None
+    if dialog:
+        lines.append(f"CRASH DIALOG OPEN: {dialog} (dd2_quit closes it)")
+    if pid and not dialog:
         res = game.eval_lua("return D.version, D.player_pos()", timeout=5)
         lines.append("bridge: " + (game.format_result(res) if res.get("ok") else res.get("err", "?")))
     return "\n".join(lines)
@@ -951,9 +954,10 @@ def dd2_log(pattern: str | None = None, lines: int = 60) -> str:
 
 
 @mcp.tool()
-def dd2_launch() -> str:
-    """Start DD2 through Steam (no-op if it is running). Loading a save still needs the player."""
-    return game.launch()
+def dd2_launch(wait: float = 0) -> str:
+    """Start DD2 through Steam (no-op if it is running). wait = seconds to block until the Lua bridge answers;
+    returns early on a boot crash (crash dialog or the game exiting) instead of hanging."""
+    return game.launch(wait)
 
 
 @mcp.tool()
