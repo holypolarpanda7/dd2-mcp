@@ -330,6 +330,14 @@ end
 -- own HitController flags every frame.
 function D.god(on)
     D.godmode.on = on ~= false
+    if not D.godmode.on then   -- the frame callback only sets the flags: clear them, or the player stays at zero damage after "off" (2026-11-05)
+        local p = D.player()
+        local hc = p and p:call("get_Hit")
+        if hc then
+            pcall(hc.call, hc, "set_IsNoDie", false)
+            pcall(hc.call, hc, "set_IsDamageZero", false)
+        end
+    end
     if not D.god_frame then
         re.on_frame(function()
             if not D.godmode.on then return end
