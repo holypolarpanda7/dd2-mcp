@@ -34,6 +34,7 @@ try {
         "pfb-info" => PfbInfo(args[1]),
         "pfb-addmsg" => PfbAddMsg(args),
         "user-swap" => UserSwap(args),
+        "user-list" => UserList(args),
         _ => Fail("unknown command " + args[0]),
     };
 } catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
@@ -82,6 +83,59 @@ static int UserSwap(string[] a) {
     if (!u.WriteTo(a[2])) return Fail("write failed");
     var back = new ReeLib.UserFile(Ws().RszFileOption, new FileHandler(a[2], false)); back.Read();
     Console.WriteLine("resources: " + string.Join(", ", back.ResourceInfoList.Select(r => r.Path)));
+    return 0;
+}
+
+// Build a .user whose root holds our own entries: from a donor, replace each named root list field with deep copies of
+// entry <template> of that list, one per spec item, each with the named fields set. Values: JSON numbers/bools, arrays of
+// numbers, or arrays of objects for a field that holds objects (each a copy of that field's first element with its fields set).
+// spec.json: {"lists": [{"field": "_Params", "template": 0, "items": [{"_Id": 9001, "_MaterialA": [1, 2]}, ...]}, ...]}
+static int UserList(string[] a) {
+    if (a.Length < 4) return Fail("usage: user-list donor.user out.user spec.json");
+    var u = new ReeLib.UserFile(Ws().RszFileOption, new FileHandler(a[1], false));
+    if (!u.Read()) return Fail("could not read " + a[1]);
+    var root = u.Instance ?? throw new Exception("no root");
+    var spec = System.Text.Json.JsonDocument.Parse(File.ReadAllText(a[3])).RootElement;
+    RszInstance Fill(RszInstance tpl, System.Text.Json.JsonElement item) {
+        var c = tpl.Clone();
+        foreach (var p in item.EnumerateObject()) {
+            if (!c.RszClass.fields.Any(f => f.name == p.Name)) throw new Exception("no field " + p.Name + " in " + c.RszClass.name);
+            c.SetFieldValue(p.Name, Conv(p.Value, c.GetFieldValue(p.Name), p.Name));
+        }
+        return c;
+    }
+    object Conv(System.Text.Json.JsonElement v, object? old, string name) {
+        if (v.ValueKind == System.Text.Json.JsonValueKind.Array) {
+            var l = new List<object>(); var proto = (old as List<object>)?.FirstOrDefault();
+            foreach (var e in v.EnumerateArray()) {
+                if (e.ValueKind == System.Text.Json.JsonValueKind.Object) {
+                    if (proto is not RszInstance pi) throw new Exception(name + ": no object in the donor list to copy");
+                    l.Add(Fill(pi, e));
+                } else {
+                    if (proto == null) throw new Exception(name + ": donor list is empty, cannot infer the element type");
+                    l.Add(Conv(e, proto, name));
+                }
+            }
+            return l;
+        }
+        if (v.ValueKind == System.Text.Json.JsonValueKind.Object) {
+            if (old is not RszInstance oi) throw new Exception(name + " is not an object field");
+            return Fill(oi, v);
+        }
+        if (v.ValueKind is System.Text.Json.JsonValueKind.True or System.Text.Json.JsonValueKind.False) return v.GetBoolean();
+        return Convert.ChangeType(v.GetDouble(), old?.GetType() ?? typeof(int));
+    }
+    foreach (var ls in spec.GetProperty("lists").EnumerateArray()) {
+        var fname = ls.GetProperty("field").GetString()!;
+        if (root.GetFieldValue(fname) is not List<object> list) return Fail("root field " + fname + " is not a list; fields: " + string.Join(", ", root.RszClass.fields.Select(f => f.name)));
+        var tpl = (RszInstance)list[ls.TryGetProperty("template", out var t) ? t.GetInt32() : 0];
+        var made = ls.GetProperty("items").EnumerateArray().Select(it => (object)Fill(tpl, it)).ToList();
+        list.Clear(); list.AddRange(made);
+    }
+    u.RebuildInfoTable();
+    if (!u.WriteTo(a[2])) return Fail("write failed");
+    var back = new ReeLib.UserFile(Ws().RszFileOption, new FileHandler(a[2], false)); back.Read();
+    Console.WriteLine(back.Instance!.Stringify(back.RSZ.InstanceList));
     return 0;
 }
 

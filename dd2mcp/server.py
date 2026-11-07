@@ -1361,11 +1361,12 @@ def dd2_warp(action: str = "list", target: str = "", count: int = 8, wait: float
 
 @mcp.tool()
 def dd2_saveguard(action: str = "status", autosave: bool = False, units: list[int] | None = None) -> str:
-    """Bridge save guard. 'arm' refuses every save outside the test units (default [1]) and, unless
+    """Bridge save guard. 'arm' refuses every save outside the test units (default saves.TEST_UNITS = [1]) and, unless
     autosave=True, every save to an Auto/AddAuto slot (the game also saves slot 0 on load). 'disarm', 'status'.
     Arm before loading a scenario so the load-time autosave cannot overwrite it. Resets on game restart."""
     if action == "arm":
-        opts = json.dumps({"units": units or [0], "autosave": autosave})
+        from . import saves
+        opts = json.dumps({"units": units or sorted(saves.TEST_UNITS), "autosave": autosave})
         code = f"return D.saveguard.arm(json.load_string({opts!r}))"
     elif action == "disarm":
         code = "return D.saveguard.disarm()"
