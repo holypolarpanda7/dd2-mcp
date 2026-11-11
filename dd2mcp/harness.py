@@ -86,7 +86,36 @@ def load(name: str, restart: bool = False) -> str:
     return "\n".join(log)
 
 
+def _alive() -> bool:
+    if not game.running():
+        raise _GameGone("DD2 exited while loading (crash: dd2_crash)")
+    return True
+
+
+class _GameGone(Exception):
+    pass
+
+
+def _game_key(scan: int) -> None:
+    """Press a key only into the game: stop when DD2 has exited or cannot be focused. (2026-11-10: the game crashed while
+    loading and the boot loop kept pressing Enter/F into whatever window had the focus: the user's terminal.)"""
+    if not game.running():
+        raise _GameGone("DD2 is not running (crashed?); no more keys sent")
+    r = control.win("focusgame")
+    if not str(r).startswith("foreground"):
+        raise _GameGone(f"could not focus DD2 ({r}); no more keys sent")
+    control.key(scan)
+
+
 def _boot_and_start(slot: int, log: list) -> dict | None:
+    try:
+        return _boot_and_start_keys(slot, log)
+    except _GameGone as e:
+        log.append(f"stopped: {e}")
+        return None
+
+
+def _boot_and_start_keys(slot: int, log: list) -> dict | None:
     """Launch DD2, arm the save guard (test units only, no autosaves), pass the boot screens and start `slot`
     from the title menu. Returns {play_time_s, pos, guard} once in game, or None (reason appended to log)."""
     game.launch()
@@ -104,13 +133,11 @@ def _boot_and_start(slot: int, log: list) -> dict | None:
         if time.monotonic() > end:
             log.append(f"title menu not reached (phase {ph}) after {presses} key presses")
             return None
-        control.win("focusgame")
-        control.key(ENTER if presses % 2 == 0 else F_KEY)
+        _game_key(ENTER if presses % 2 == 0 else F_KEY)
         presses += 1
         time.sleep(1.5)
     # The title phase starts on the "START GAME" splash; Enter opens the menu (and does nothing once it is open).
-    control.win("focusgame")
-    control.key(ENTER)
+    _game_key(ENTER)
     time.sleep(2.5)
     log.append(f"title menu after {presses + 1} key presses")
 
@@ -135,12 +162,11 @@ def _boot_and_start(slot: int, log: list) -> dict | None:
     if latest != slot % 5:
         log.append(f"could not point the latest save at slot type {slot % 5} (got {latest})")
         return None
-    control.win("focusgame")
-    control.key(F_KEY)
+    _game_key(F_KEY)
     if not _wait(lambda: (_flow_phase() or 0) > PHASE_TITLE_MENU, 15, 0.5):
         log.append("title menu did not start a load after F (menu not on its first item?)")
         return None
-    if not _wait(lambda: _flow_phase() == PHASE_IN_GAME and _eval("return D.player_pos() ~= nil"), 240, 2):
+    if not _wait(lambda: _alive() and _flow_phase() == PHASE_IN_GAME and _eval("return D.player_pos() ~= nil"), 240, 2):
         log.append(f"not in game after 240 s (phase {_flow_phase()})")
         return None
 
