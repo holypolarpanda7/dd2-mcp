@@ -1148,10 +1148,16 @@ def dd2_scenario(action: str = "list", name: str | None = None, slot: int | None
 
 
 @mcp.tool()
-def dd2_god(on: bool = True) -> str:
+def dd2_god(on: bool | str = True) -> str:
     """Test god mode for the player (bridge 0.8.2+): skips HitController.damageProc and holds IsNoDie/IsDamageZero
     every frame (off clears both). Knockback still happens. Resets on game restart. Use it for any combat test: enemies killed the
-    test character within seconds several times (2026-10-31)."""
+    test character within seconds several times (2026-10-31). on: True/False, or the strings "on"/"off" (a plain bool("off") is True:
+    tests calling dd2_god("off") silently kept god mode ON for weeks, so no enemy hit ever landed; 2026-11-10)."""
+    if isinstance(on, str):
+        s = on.strip().lower()
+        if s not in ("on", "off", "true", "false", "1", "0"):
+            return f"on must be on/off or true/false, got {on!r}"
+        on = s in ("on", "true", "1")
     return game.format_result(game.eval_lua(f"return D.god({'true' if on else 'false'})"))
 
 
