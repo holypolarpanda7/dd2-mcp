@@ -862,6 +862,59 @@ def dd2_refcount(expr: str, call: str = "", wait: float = 1.5) -> str:
 
 
 @mcp.tool()
+def dd2_weapon_kind(weapon: str = "", children_of: str = "") -> str:
+    """The game's weapon-type TREE (app.WeaponIDUtil's kind table, read live; DnD_Classes docs/game-reference.md "Weapon stats and
+    kinds"). weapon: a WeaponID number or enum name (e.g. 'wp07_000_00', '1565045488'): its ancestor chain, each named from
+    app.WeaponID, and whether it is really in the table (the lookup has NO equality check: an id not in it takes the next lower
+    row's chain). children_of: a family (id or name): the rows directly under it. No arguments: the table size and the root
+    families (parent -1). Mod-added rows show as bare numbers (no enum name)."""
+    lua = r'''local td = sdk.find_type_definition("app.WeaponIDUtil")
+local fn = tonumber(tostring(td:get_method("isKindOf(app.WeaponID, app.WeaponID)"):get_function()):match("(%x+)$"), 16)
+local g = {}
+local i = 0
+while i < 0x5a and #g < 2 do
+  local op = sdk.to_valuetype(fn + i, "System.Byte"):read_byte(0); local m = sdk.to_valuetype(fn + i + 1, "System.Byte"):read_byte(0)
+  if op == 0x8B and (m & 0xC7) == 0x05 then local d = sdk.to_valuetype(fn + i + 2, "System.Int32"):read_dword(0); if d >= 0x80000000 then d = d - 0x100000000 end; g[#g + 1] = fn + i + 6 + d; i = i + 6 else i = i + 1 end
+end
+if #g < 2 then return "table loads not found in isKindOf (game updated?)" end
+local A = sdk.to_valuetype(g[1], "System.UInt64"):read_qword(0); local P = sdk.to_valuetype(g[2], "System.UInt64"):read_qword(0)
+local n = sdk.to_valuetype(A + 0x1c, "System.Int32"):read_dword(0)
+local function id(k) return sdk.to_valuetype(A + 0x20 + k * 4, "System.UInt32"):read_dword(0) end
+local function par(k) local v = sdk.to_valuetype(P + 0x20 + k * 4, "System.UInt32"):read_dword(0); return v >= 0x80000000 and v - 0x100000000 or v end
+local names = {}
+for _, f in ipairs(sdk.find_type_definition("app.WeaponID"):get_fields()) do if f:is_static() then local v = f:get_data(nil); if type(v) == "number" then names[v < 0 and v + 0x100000000 or v] = f:get_name() end end end
+local function nm(v) return names[v] and (names[v] .. "=" .. v) or tostring(v) end
+local function resolve(s)
+  if s == "" then return nil end
+  local v = tonumber(s); if v then return v < 0 and v + 0x100000000 or v end
+  for k, x in pairs(names) do if x == s then return k end end
+end
+local function find(v) local lo = 0; for k = 0, n - 1 do if id(k) <= v then lo = k end end; return lo end
+local out = {}
+local W, C = resolve(WEAPON), resolve(CHILDREN)
+if WEAPON ~= "" and not W then return "unknown weapon " .. WEAPON end
+if W then
+  local k = find(W); out[#out + 1] = (id(k) == W and "in the table" or ("NOT in the table: resolves through " .. nm(id(k))))
+  local chain = {}; local j = k
+  for _ = 1, 20 do if j < 0 then break end; chain[#chain + 1] = nm(id(j)); j = par(j) end
+  out[#out + 1] = "chain: " .. table.concat(chain, " > ")
+end
+if CHILDREN ~= "" then
+  if not C then return "unknown family " .. CHILDREN end
+  local k = find(C); local kids = {}
+  if id(k) == C then for j = 0, n - 1 do if par(j) == k then kids[#kids + 1] = nm(id(j)) end end end
+  out[#out + 1] = nm(C) .. ": " .. #kids .. " direct rows: " .. table.concat(kids, ", ")
+end
+if not W and CHILDREN == "" then
+  local roots = {}; for j = 0, n - 1 do if par(j) < 0 then roots[#roots + 1] = nm(id(j)) end end
+  out[#out + 1] = n .. " rows; roots: " .. table.concat(roots, ", ")
+end
+return table.concat(out, "\n")'''
+    code = "local WEAPON, CHILDREN = " + json.dumps(str(weapon)) + ", " + json.dumps(str(children_of)) + "\n" + lua
+    return game.format_result(game.eval_lua(code, phase="frame", timeout=30))
+
+
+@mcp.tool()
 def dd2_table_scan(sizes: list[int], roots: list[str] | None = None, depth: int = 4, max_objects: int = 80000, filter: str = "") -> str:
     """Find live arrays and List`1s of given lengths: walks reference fields from every live managed singleton (dd2_singletons
     cache) and the player's Human, Character and HitController, to `depth` levels. Use: tables still sized to an original id

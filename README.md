@@ -19,6 +19,7 @@ MCP server for Dragon's Dogma 2 modding through REFramework. Started 2026-10-26 
 | `dd2_crash` | Analyze the last native crash (`reframework_crash.dmp`): exception, registers, disassembly at the fault, stack return addresses mapped to managed methods; no game needed |
 | `dd2_loadloop` | Load-crash rate of a setup: repeated boot + `load_slot` cycles in a background process, each crash's REFramework log + dump kept, a mod's own log lines (`log_filter`) per run; `start` / `status` / `stop` |
 | `dd2_refcount` | Does a game call take, keep or consume a reference? An object's count before, right after a Lua call and after a wait, plus validity |
+| `dd2_weapon_kind` | The game's weapon-type tree (WeaponIDUtil kind table, live): a weapon's ancestor chain (flags ids not really in the table), a family's rows, the root families |
 | `dd2_table_scan` | Live arrays / lists of given lengths, walked from every managed singleton and the player: tables still sized to an original id count a mod grows |
 | `dd2_methodmap` | Managed method -> native code RVA map per game build (`research/methodmap-<build>.tsv`): `export` from the running game, `find` by regex |
 | `dd2_disasm` | Disassemble DD2.exe from disk at an RVA or a method name; rip-relative globals annotated (poke live with `D.poke32`) |
