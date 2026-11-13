@@ -94,6 +94,7 @@ static int UserSwap(string[] a) {
 // entry <template> of that list, one per spec item, each with the named fields set. Values: JSON numbers/bools, arrays of
 // numbers, or arrays of objects for a field that holds objects (each a copy of that field's first element with its fields set).
 // spec.json: {"lists": [{"field": "_Params", "template": 0, "items": [{"_Id": 9001, "_MaterialA": [1, 2]}, ...]}, ...]}
+// An item's "__template": n copies donor entry n instead of the list's template (e.g. one weapon row per staff tier).
 static int UserList(string[] a) {
     if (a.Length < 4) return Fail("usage: user-list donor.user out.user spec.json");
     var u = new ReeLib.UserFile(Ws().RszFileOption, new FileHandler(a[1], false));
@@ -103,6 +104,7 @@ static int UserList(string[] a) {
     RszInstance Fill(RszInstance tpl, System.Text.Json.JsonElement item) {
         var c = tpl.Clone();
         foreach (var p in item.EnumerateObject()) {
+            if (p.Name == "__template") continue;
             if (!c.RszClass.fields.Any(f => f.name == p.Name)) throw new Exception("no field " + p.Name + " in " + c.RszClass.name);
             c.SetFieldValue(p.Name, Conv(p.Value, c.GetFieldValue(p.Name), p.Name));
         }
@@ -134,7 +136,12 @@ static int UserList(string[] a) {
         var fname = ls.GetProperty("field").GetString()!;
         if (root.GetFieldValue(fname) is not List<object> list) return Fail("root field " + fname + " is not a list; fields: " + string.Join(", ", root.RszClass.fields.Select(f => f.name)));
         var tpl = (RszInstance)list[ls.TryGetProperty("template", out var t) ? t.GetInt32() : 0];
-        var made = ls.GetProperty("items").EnumerateArray().Select(it => (object)Fill(tpl, it)).ToList();
+        // an item may name its own template entry ("__template": index into the donor list); the key is not a field
+        var donor = list.ToList();
+        var made = ls.GetProperty("items").EnumerateArray().Select(it => {
+            var own = it.TryGetProperty("__template", out var ti) ? (RszInstance)donor[ti.GetInt32()] : tpl;
+            return (object)Fill(own, it);
+        }).ToList();
         list.Clear(); list.AddRange(made);
     }
     u.RebuildInfoTable();
