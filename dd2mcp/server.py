@@ -862,6 +862,41 @@ def dd2_refcount(expr: str, call: str = "", wait: float = 1.5) -> str:
 
 
 @mcp.tool()
+def dd2_sound_trace(seconds: float = 4.0, filter: str = "") -> str:
+    """Which object fires which Wwise sound trigger, live, for `seconds` (do the action meanwhile, e.g. dd2_keys 'x'). Hooks
+    soundlib.SoundContainer.trigger(UInt32, GameObject, ...) once (flag-gated, installed on first use) and logs time, owner
+    GameObject name and trigger id; filter = Lua pattern on the owner name (e.g. 'wp13' for a weapon). Then look the id up in
+    the owner's container: WwiseContainerApp.get_AllTriggerInfoListData() lists the TriggerInfoListData files (a weapon also
+    gets its FAMILY's list by kind, not only the prefab's). DnD_Classes 2026-11-13: found the staff draw sound on the Spell Book."""
+    install = r'''if not D._sndtrace then D._sndtrace = { on = false, log = {} }
+  local td = sdk.find_type_definition("soundlib.SoundContainer")
+  for _, m in ipairs(td:get_methods()) do
+    if m:get_name() == "trigger" and m:get_num_params() == 11 and m:get_param_types()[1]:get_full_name() == "System.UInt32" then
+      sdk.hook(m, function(args)
+        local T = D._sndtrace
+        if not T.on then return end
+        pcall(function()
+          local go = sdk.to_managed_object(args[2]):call("get_GameObject")
+          local n = go and go:call("get_Name") or "?"
+          if T.filter == "" or n:find(T.filter) then
+            T.log[#T.log + 1] = string.format("%.2f %s %d", os.clock() - T.t0, n, sdk.to_int64(args[3]) & 0xFFFFFFFF)
+          end
+        end)
+      end, function(r) return r end)
+    end
+  end
+end
+D._sndtrace.log = {}; D._sndtrace.filter = FILTER; D._sndtrace.t0 = os.clock(); D._sndtrace.on = true
+return "armed"'''
+    r = game.eval_lua("local FILTER = " + json.dumps(filter) + "\n" + install, phase="update")
+    if not r.get("ok"):
+        return game.format_result(r)
+    time.sleep(max(0.2, seconds))
+    r = game.eval_lua("D._sndtrace.on = false; local l = D._sndtrace.log; return #l .. ' triggers\\n' .. table.concat(l, '\\n', 1, math.min(#l, 200))", phase="frame")
+    return game.format_result(r)
+
+
+@mcp.tool()
 def dd2_weapon_kind(weapon: str = "", children_of: str = "") -> str:
     """The game's weapon-type TREE (app.WeaponIDUtil's kind table, read live; DnD_Classes docs/game-reference.md "Weapon stats and
     kinds"). weapon: a WeaponID number or enum name (e.g. 'wp07_000_00', '1565045488'): its ancestor chain, each named from
