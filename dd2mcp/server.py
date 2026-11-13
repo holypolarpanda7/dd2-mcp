@@ -3,6 +3,7 @@ import json
 import pathlib
 import re
 import sys
+import time
 
 from mcp.server.mcpserver import MCPServer
 
@@ -800,6 +801,123 @@ def dd2_crash(dump: str | None = None) -> str:
     from . import crash
     import pathlib
     return crash.analyze(pathlib.Path(dump) if dump else crash.DUMP)
+
+
+@mcp.tool()
+def dd2_loadloop(action: str = "status", slot: int = 6, runs: int = 12, max_crashes: int = 2, watch: float = 45,
+                 log_filter: str = "", project: str = "", run_id: str = "") -> str:
+    """Load-crash rate of a setup: repeated boot + load_slot cycles in a BACKGROUND process (~1.5 min per run), keeping each
+    crash's REFramework log and dump. action 'start' (slot, runs, max_crashes: stop early after that many, watch: seconds each
+    load must stay up, log_filter: regex for a mod's own log lines, e.g. '\\[DnD Classes\\]', kept per run so the last
+    thing the mod did before a crash shows; project: deployed first and undeployed at the end), 'status' (the latest loop, or
+    run_id), 'stop' (after the current run). Compare setups by crash counts over the same number of runs (2026-11-12:
+    10 core rows 9/68 vs 7 rows 0/24 found a load crash). The game is busy for the whole loop."""
+    import subprocess
+    from . import loadloop
+    root = game.SCRATCH / "loadloop"
+    root.mkdir(parents=True, exist_ok=True)
+    latest = root / "latest.txt"
+    out = root / run_id if run_id else (root / latest.read_text().strip() if latest.exists() else None)
+    st = json.loads((out / "status.json").read_text()) if out and (out / "status.json").exists() else None
+    if action == "status":
+        return loadloop.summary(st, detail=False) + f"\n  folder: {out}" if st else "no loop yet: action='start'"
+    if action == "stop":
+        if not st or st.get("state") != "running":
+            return "no running loop"
+        (out / "STOP").write_text("stop")
+        return "stopping after the current run"
+    if action != "start":
+        return f"unknown action {action!r}"
+    if st and st.get("state") == "running":
+        return "a loop is already running: " + loadloop.summary(st, detail=False)
+    rid = time.strftime("%Y%m%d_%H%M%S")
+    out = root / rid
+    out.mkdir(parents=True)
+    latest.write_text(rid)
+    subprocess.Popen([sys.executable, "-m", "dd2mcp.loadloop", str(out), str(slot), str(runs), str(max_crashes), str(watch),
+                      log_filter, project], cwd=str(pathlib.Path(__file__).parents[1]),
+                     stdout=open(out / "loop.out", "w"), stderr=subprocess.STDOUT)
+    return f"loop {rid} started: {runs} runs of slot {slot} (stop after {max_crashes} crashes); dd2_loadloop('status') for progress"
+
+
+@mcp.tool()
+def dd2_refcount(expr: str, call: str = "", wait: float = 1.5) -> str:
+    """Does a game call take, keep or consume a reference? expr: Lua expression for a managed object (e.g.
+    'sdk.create_instance("app.ShellRequest.ShellCreateInfo"):add_ref()'); call: Lua run with that object as `o` (update phase);
+    the count (header +8) is read before, right after the call and again after `wait` seconds, with the object's validity.
+    A drop to 0 = the call consumed the caller's reference (requestCreateShell does: fresh object per call, add_ref_permanent,
+    never reuse). 0xFFFFFFFF = a fresh object nobody owns yet. Crash RCA 2026-11-12."""
+    first = game.eval_lua("local o = (" + expr + ")\nif not o then return 'expr gave nil' end\n"
+                          "local a = o:get_address(); local function rc() return sdk.to_valuetype(a + 8, 'System.UInt32'):read_dword(0) end\n"
+                          "local r0 = rc()\n" + call + "\nlocal r1 = rc()\n_G.__dd2rc = { a = a }\n"
+                          "return string.format('%s @%x: before %d, after the call %d', o:get_type_definition():get_full_name(), a, r0, r1)",
+                          phase="update")
+    if not first.get("ok"):
+        return game.format_result(first)
+    time.sleep(max(0.0, wait))
+    later = game.eval_lua("local a = _G.__dd2rc.a; local r = sdk.to_valuetype(a + 8, 'System.UInt32'):read_dword(0)\n"
+                          "local ok = pcall(function() return sdk.to_managed_object(a):get_type_definition():get_full_name() end)\n"
+                          "return string.format('after %.1f s: %d, valid %s', " + str(float(wait)) + ", r, tostring(ok))", phase="update")
+    return "\n".join(str(v) for v in (first.get("ret") or []) + (later.get("ret") or [later.get("err")]))
+
+
+@mcp.tool()
+def dd2_table_scan(sizes: list[int], roots: list[str] | None = None, depth: int = 4, max_objects: int = 80000, filter: str = "") -> str:
+    """Find live arrays and List`1s of given lengths: walks reference fields from every live managed singleton (dd2_singletons
+    cache) and the player's Human, Character and HitController, to `depth` levels. Use: tables still sized to an original id
+    count a mod grows (e.g. sizes=[10, 11] for vocations, [39, 40] core skills): the engine indexes many without bounds checks.
+    roots: singleton names to start from instead of all; filter: regex on path or type. Crash RCA 2026-11-12."""
+    if roots is None:
+        dd2_singletons()
+        cache = game.SCRATCH / "singletons.json"
+        roots = json.loads(cache.read_text()) if cache.exists() else []
+    lua = (r'''local SIZES, MAXD, MAXN = {}, %d, %d
+for _, s in ipairs({%s}) do SIZES[s] = true end
+local seen, n, hits = {}, 0, {}
+local function arr_len(o, tn)
+  if tn:sub(-2) == "[]" then local ok, l = pcall(o.call, o, "get_Length"); return ok and l or nil end
+  if tn:find("^System.Collections.Generic.List`1") then local ok, it = pcall(o.get_field, o, "_size"); return ok and it or nil end
+end
+local function walk(o, path, d)
+  if n > MAXN or d > MAXD then return end
+  local ok, a = pcall(o.get_address, o); if not ok or not a or seen[a] then return end
+  seen[a] = true; n = n + 1
+  local okt, td = pcall(o.get_type_definition, o); if not okt or not td then return end
+  local tn = td:get_full_name()
+  local l = arr_len(o, tn)
+  if l and SIZES[l] then hits[#hits + 1] = string.format("%%s | %%s | len %%d", path, tn, l) end
+  if tn:sub(-2) == "[]" then
+    local et = sdk.find_type_definition(tn:sub(1, -3))
+    if et and not et:is_value_type() and l and l <= 64 then for i = 0, l - 1 do local okc, c = pcall(o.get_element, o, i); if okc and type(c) == "userdata" then walk(c, path .. "[" .. i .. "]", d + 1) end end end
+    return
+  end
+  local t = td
+  while t do
+    for _, f in ipairs(t:get_fields()) do
+      if not f:is_static() and not f:get_type():is_value_type() then
+        local okv, v = pcall(o.get_field, o, f:get_name())
+        if okv and type(v) == "userdata" then walk(v, path .. "." .. f:get_name(), d + 1) end
+      end
+    end
+    t = t:get_parent_type()
+  end
+end
+for _, nm in ipairs({%s}) do local ok, inst = pcall(sdk.get_managed_singleton, nm); if ok and inst then walk(inst, nm, 0) end end
+local cm = sdk.get_managed_singleton("app.CharacterManager"); local h = cm and cm:get_ManualPlayerHuman()
+if h then walk(h, "player.Human", 0); local go = h:get_GameObject()
+  for _, tn in ipairs({"app.Character", "app.HitController"}) do local c = go:getComponent(sdk.typeof(tn)); if c then walk(c, "player." .. tn, 0) end end end
+table.sort(hits)
+return "visited " .. n .. "\n" .. table.concat(hits, "\n")''' % (depth, max_objects, ",".join(str(int(s)) for s in sizes),
+                                                             ",".join(json.dumps(r) for r in roots)))
+    r = game.eval_lua(lua, phase="update", timeout=120)
+    if not r.get("ok"):
+        return game.format_result(r)
+    text = (r.get("ret") or [""])[0]
+    if filter:
+        rx = re.compile(filter, re.I)
+        lines = text.splitlines()
+        text = "\n".join(lines[:1] + [l for l in lines[1:] if rx.search(l)])
+    return text
 
 
 @mcp.tool()
