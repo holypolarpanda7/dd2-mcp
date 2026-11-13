@@ -32,7 +32,7 @@ try {
         "efx-normalize" => EfxNormalizeCmd(args[1], args[2]),
         "efx-info" => EfxInfo(args[1], args.Contains("--all")),
         "efx-scan" => EfxScan(args[1], args.Length > 2 ? args[2] : "", args.Contains("--from") ? int.Parse(args[Array.IndexOf(args, "--from") + 1]) : 0),
-        "pfb-info" => PfbInfo(args[1]),
+        "pfb-info" => PfbInfo(args[1], args.Length > 3 && args[2] == "--fields" ? args[3] : null),
         "pfb-addmsg" => PfbAddMsg(args),
         "pfb-swap" => PfbSwap(args),
         "scn-find" => ScnFind(args),
@@ -63,9 +63,27 @@ static void PrintGo(ReeLib.Pfb.PfbGameObject go, string ind) {
 }
 
 // Print a prefab's game objects, components and resources.
-static int PfbInfo(string path) {
+// --fields <regex>: also print the field values of every component whose class name matches (e.g. "app.Weapon$").
+static int PfbInfo(string path, string? fields = null) {
     var pfb = LoadPfb(path);
     foreach (var go in pfb.GameObjects) PrintGo(go, "");
+    if (fields != null) {
+        var rx = new System.Text.RegularExpressions.Regex(fields);
+        void Dump(ReeLib.Pfb.PfbGameObject go, string ind) {
+            foreach (var c in go.Components) {
+                var ci = c;
+                if (!rx.IsMatch(ci.RszClass.name)) continue;
+                Console.WriteLine($"{ind}{ci.RszClass.name}:");
+                for (int i = 0; i < ci.RszClass.fields.Length && i < ci.Values.Length; i++) {
+                    var v = ci.Values[i];
+                    var txt = v is RszInstance ri ? "<" + ri.RszClass.name + ">" : v is System.Collections.IList l ? $"[{l.Count}]" : v?.ToString();
+                    Console.WriteLine($"{ind}  {ci.RszClass.fields[i].name} = {txt}");
+                }
+            }
+            foreach (var ch in go.Children) Dump(ch, ind + "  ");
+        }
+        foreach (var go in pfb.GameObjects) Dump(go, "");
+    }
     Console.WriteLine("resources: " + string.Join(", ", pfb.ResourceInfoList.Select(r => r.Path)));
     return 0;
 }
