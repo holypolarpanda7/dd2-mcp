@@ -33,6 +33,7 @@ try {
         "efx-scan" => EfxScan(args[1], args.Length > 2 ? args[2] : "", args.Contains("--from") ? int.Parse(args[Array.IndexOf(args, "--from") + 1]) : 0),
         "pfb-info" => PfbInfo(args[1]),
         "pfb-addmsg" => PfbAddMsg(args),
+        "pfb-swap" => PfbSwap(args),
         "user-swap" => UserSwap(args),
         "user-list" => UserList(args),
         _ => Fail("unknown command " + args[0]),
@@ -123,6 +124,7 @@ static int UserList(string[] a) {
             return Fill(oi, v);
         }
         if (v.ValueKind is System.Text.Json.JsonValueKind.True or System.Text.Json.JsonValueKind.False) return v.GetBoolean();
+        if (v.ValueKind == System.Text.Json.JsonValueKind.String) return v.GetString()!;   // paths, joint names
         return Convert.ChangeType(v.GetDouble(), old?.GetType() ?? typeof(int));
     }
     foreach (var ls in spec.GetProperty("lists").EnumerateArray()) {
@@ -157,6 +159,46 @@ static int PfbAddMsg(string[] a) {
     pfb.RebuildInfoTables();
     if (!pfb.WriteTo(a[2])) return Fail("write failed");
     foreach (var go in LoadPfb(a[2]).GameObjects) PrintGo(go, "");
+    return 0;
+}
+
+// Copy a prefab with string values swapped (old=new, exact match, anywhere in any instance, also inside lists) and
+// typed fields set (--set Class.field=value: int/uint/float/bool, matched by the class's field name), then rebuild its
+// resource tables. Used for a mod weapon: a game weapon prefab with its mesh/material paths, name and app.Weapon ID changed.
+static int PfbSwap(string[] a) {
+    if (a.Length < 4) return Fail("usage: pfb-swap in.pfb out.pfb old=new... [--set Class.field=value]...");
+    var pfb = LoadPfb(a[1]);
+    var swaps = new Dictionary<string, string>(); var sets = new List<(string cls, string field, string val)>();
+    for (int i = 3; i < a.Length; i++) {
+        if (a[i] == "--set") { var kv = a[++i].Split('=', 2); var cf = kv[0].Split('.'); sets.Add((string.Join('.', cf[..^1]), cf[^1], kv[1])); continue; }
+        var p = a[i].Split('=', 2); swaps[p[0]] = p[1];
+    }
+    int changed = 0;
+    object Swap(object v) {
+        if (v is string s && swaps.TryGetValue(s, out var n)) { changed++; Console.WriteLine($"  \"{s}\" -> \"{n}\""); return n; }
+        if (v is IList l) { for (int k = 0; k < l.Count; k++) l[k] = Swap(l[k]); }
+        return v;
+    }
+    foreach (var inst in pfb.RSZ.InstanceList) {
+        if (inst?.Values == null) continue;
+        for (int k = 0; k < inst.Values.Length; k++) inst.Values[k] = Swap(inst.Values[k]);
+        foreach (var (cls, field, val) in sets) {
+            if (inst.RszClass.name != cls) continue;
+            int idx = inst.RszClass.IndexOfField(field);
+            if (idx < 0) throw new Exception($"{cls} has no field {field}");
+            var old = inst.Values[idx];
+            inst.Values[idx] = old switch {
+                int => int.Parse(val), uint => uint.Parse(val), float => float.Parse(val, System.Globalization.CultureInfo.InvariantCulture),
+                bool => bool.Parse(val), long => long.Parse(val), ulong => ulong.Parse(val), _ => throw new Exception($"{cls}.{field}: unsupported type {old?.GetType()}") };
+            changed++; Console.WriteLine($"  {cls}.{field}: {old} -> {inst.Values[idx]}");
+        }
+    }
+    if (changed == 0) return Fail("nothing matched");
+    pfb.RebuildInfoTables();
+    if (!pfb.WriteTo(a[2])) return Fail("write failed");
+    var back = LoadPfb(a[2]);
+    foreach (var go in back.GameObjects) PrintGo(go, "");
+    Console.WriteLine("resources: " + string.Join(", ", back.ResourceInfoList.Select(r => r.Path)));
     return 0;
 }
 
