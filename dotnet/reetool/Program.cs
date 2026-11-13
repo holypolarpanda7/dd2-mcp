@@ -131,6 +131,14 @@ static int UserList(string[] a) {
         return c;
     }
     object Conv(System.Text.Json.JsonElement v, object? old, string name) {
+        if (v.ValueKind == System.Text.Json.JsonValueKind.Array && old is System.Numerics.Vector3) {     // [x, y, z]
+            var f = v.EnumerateArray().Select(e => (float)e.GetDouble()).ToArray();
+            return new System.Numerics.Vector3(f[0], f[1], f[2]);
+        }
+        if (v.ValueKind == System.Text.Json.JsonValueKind.Array && old is System.Numerics.Quaternion) {  // [x, y, z, w]
+            var f = v.EnumerateArray().Select(e => (float)e.GetDouble()).ToArray();
+            return new System.Numerics.Quaternion(f[0], f[1], f[2], f[3]);
+        }
         if (v.ValueKind == System.Text.Json.JsonValueKind.Array) {
             var l = new List<object>(); var proto = (old as List<object>)?.FirstOrDefault();
             foreach (var e in v.EnumerateArray()) {
@@ -209,6 +217,19 @@ static int PfbSwap(string[] a) {
         if (v is IList l) { for (int k = 0; k < l.Count; k++) l[k] = Swap(l[k]); }
         return v;
     }
+    // user-data file references (e.g. a WwiseContainerApp's sound container lists) are not instance strings: they sit on the
+    // instance's RSZUserData and in the file's UserdataInfoList
+    string? PathOf(object o) => (o.GetType().GetProperty("Path")?.GetValue(o) ?? o.GetType().GetField("Path")?.GetValue(o)) as string;
+    void SetPath(object o, string v) {
+        var pr = o.GetType().GetProperty("Path");
+        if (pr != null && pr.CanWrite) pr.SetValue(o, v); else o.GetType().GetField("Path")?.SetValue(o, v);
+    }
+    foreach (var inst in pfb.RSZ.InstanceList)
+        if (inst?.RSZUserData is object ud && PathOf(ud) is string up && swaps.TryGetValue(up, out var un)) {
+            SetPath(ud, un); changed++; Console.WriteLine($"  userdata \"{up}\" -> \"{un}\"");
+        }
+    foreach (var ui in pfb.UserdataInfoList)
+        if (PathOf(ui) is string up2 && swaps.TryGetValue(up2, out var un2)) SetPath(ui, un2);
     foreach (var inst in pfb.RSZ.InstanceList) {
         if (inst?.Values == null) continue;
         for (int k = 0; k < inst.Values.Length; k++) inst.Values[k] = Swap(inst.Values[k]);
