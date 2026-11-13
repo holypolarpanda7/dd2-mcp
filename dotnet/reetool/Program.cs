@@ -4,6 +4,7 @@
 //   mesh-rt <in> <out>                                            read + rewrite a .mesh (round-trip check)
 //   mdf-info <file>                                               list the materials of an .mdf2
 //   efx-info <file> [--all]                                       entries and attributes of an .efx (mesh/material paths shown)
+//   mdf-graft base donor out baseMat donorMat|- [p=x,y,z,w]..   material variant: a donor material (renamed) into a base .mdf2, params set
 //   mdf-scan <dir> [regex] [perMaster]                                       list .mdf2 materials (master shader + names) whose master matches the regex
 //   efx-debug <file>                                              step through the efx read (header, strings, sections) printing file offsets
 //   efx-normalize <in> <out>                                      strip the per-entry extra int32 this game build added, so REE-Lib can parse it
@@ -36,6 +37,7 @@ try {
         "pfb-swap" => PfbSwap(args),
         "scn-find" => ScnFind(args),
         "reflect" => Reflect(args[1]),
+        "mdf-graft" => MdfGraft(args),
         "pfb-add-weaponreg" => PfbAddWeaponReg(args),
         "user-swap" => UserSwap(args),
         "user-list" => UserList(args),
@@ -311,6 +313,34 @@ static int MdfInfo(string path, bool full) {
         for (int i = 0; i < m.Parameters.Count; i++) { var p = m.Parameters[i]; Console.WriteLine($"  param[{i}] {p.paramName} x{p.componentCount} = ({p.parameter.X:0.###}, {p.parameter.Y:0.###}, {p.parameter.Z:0.###}, {p.parameter.W:0.###})"); }
     }
     return 0;
+}
+
+// Material variants: replace one material of a base .mdf2 with a (renamed) copy of a donor's material, then set parameters.
+// usage: mdf-graft base.mdf2 donor.mdf2 out.mdf2 <baseMat> <donorMat|-> [param=x,y,z,w]...
+// donorMat "-" keeps the base material and only sets parameters. The mesh binds materials by NAME, so the copy takes baseMat's name.
+// Used for Spell Book tiers: the book's cover material takes a tinted skill-tome material (same texture atlas and UV layout).
+static int MdfGraft(string[] a) {
+    if (a.Length < 6) return Fail("usage: mdf-graft base.mdf2 donor.mdf2 out.mdf2 <baseMat> <donorMat|-> [param=x,y,z,w]...");
+    var b = new MdfFile(new FileHandler(a[1], false)); if (!b.Read()) return Fail("read failed: " + a[1]);
+    int bi = b.Materials.FindIndex(m => m.Name == a[4]);
+    if (bi < 0) return Fail("no material " + a[4] + " in base; has: " + string.Join(", ", b.Materials.Select(m => m.Name)));
+    if (a[5] != "-") {
+        var d = new MdfFile(new FileHandler(a[2], false)); if (!d.Read()) return Fail("read failed: " + a[2]);
+        var dm = d.Materials.FirstOrDefault(m => m.Name == a[5]);
+        if (dm == null) return Fail("no material " + a[5] + " in donor; has: " + string.Join(", ", d.Materials.Select(m => m.Name)));
+        var c = dm.Clone(); c.Name = a[4];
+        b.Materials[bi] = c;
+    }
+    var mat = b.Materials[bi];
+    foreach (var kv in a.Skip(6)) {
+        var eq = kv.IndexOf('='); if (eq < 0) return Fail("bad param " + kv);
+        var name = kv[..eq]; var v = kv[(eq + 1)..].Split(',').Select(x => float.Parse(x, System.Globalization.CultureInfo.InvariantCulture)).ToArray();
+        var p = mat.Parameters.FirstOrDefault(x => x.paramName == name);
+        if (p == null) return Fail("no parameter " + name + " in " + mat.Name);
+        p.parameter = new System.Numerics.Vector4(v.ElementAtOrDefault(0), v.ElementAtOrDefault(1), v.ElementAtOrDefault(2), v.Length > 3 ? v[3] : 1f);
+    }
+    if (!b.WriteTo(a[3])) return Fail("write failed");
+    return MdfInfo(a[3], true);
 }
 
 static int MdfScan(string dir, string regex, int perMaster) {
