@@ -34,6 +34,9 @@ try {
         "pfb-info" => PfbInfo(args[1]),
         "pfb-addmsg" => PfbAddMsg(args),
         "pfb-swap" => PfbSwap(args),
+        "scn-find" => ScnFind(args),
+        "reflect" => Reflect(args[1]),
+        "pfb-add-weaponreg" => PfbAddWeaponReg(args),
         "user-swap" => UserSwap(args),
         "user-list" => UserList(args),
         _ => Fail("unknown command " + args[0]),
@@ -199,6 +202,62 @@ static int PfbSwap(string[] a) {
     var back = LoadPfb(a[2]);
     foreach (var go in back.GameObjects) PrintGo(go, "");
     Console.WriteLine("resources: " + string.Join(", ", back.ResourceInfoList.Select(r => r.Path)));
+    return 0;
+}
+
+// Print every instance of a class in a scene (or prefab): its field names, values and value types (user-data references
+// show their class and path), to see how the game wires a component before copying it into a mod prefab.
+static int ScnFind(string[] a) {
+    if (a.Length < 3) return Fail("usage: scn-find file.scn|file.pfb ClassName");
+    ReeLib.RSZFile rsz;
+    if (a[1].Contains(".pfb")) rsz = LoadPfb(a[1]).RSZ;
+    else { var scn = new ReeLib.ScnFile(Ws().RszFileOption, new FileHandler(a[1], false)); if (!scn.Read()) return Fail("read failed"); rsz = scn.RSZ; }
+    foreach (var inst in rsz.InstanceList) {
+        if (inst == null || inst.RszClass.name != a[2]) continue;
+        Console.WriteLine($"{inst.RszClass.name} #{inst.Index}");
+        for (int k = 0; k < inst.Values.Length; k++) {
+            var v = inst.Values[k]; var f = inst.RszClass.fields[k];
+            string desc = v switch {
+                RszInstance ri => $"instance {ri.RszClass.name} #{ri.Index}" + (ri.RSZUserData != null ? $" userdata path={ri.RSZUserData.Path}" : ""),
+                IList l => $"list[{l.Count}]",
+                _ => $"{v} ({v?.GetType().Name})" };
+            Console.WriteLine($"  {f.name} [{f.type}/{f.original_type}] = {desc}");
+        }
+    }
+    return 0;
+}
+
+// Add an app.WeaponCatalogRegister to a prefab's root (as the DLC scene appdata/extracontents/contents_0014.scn wires it):
+// Enabled, CatalogData + WeaponSetting as references to .user files (engine paths, e.g. "DnDClasses/Weapons/X.user").
+// On awake it registers the catalog (WeaponID -> prefab) and the weapon offsets with the EquipmentManager.
+static int PfbAddWeaponReg(string[] a) {
+    if (a.Length < 5) return Fail("usage: pfb-add-weaponreg in.pfb out.pfb catalog.user setting.user");
+    var pfb = LoadPfb(a[1]);
+    var root = pfb.Root ?? throw new Exception("no root");
+    RszInstance Ref(string cls, string path) {
+        var tmp = pfb.RSZ.CreateInstance(cls);
+        return new RszInstance(tmp.RszClass, new RSZUserDataInfo { Path = path, ClassName = cls, typeId = tmp.RszClass.typeId });
+    }
+    var comp = pfb.RSZ.CreateInstance("app.WeaponCatalogRegister");
+    comp.SetFieldValue("Enabled", true);
+    comp.SetFieldValue("CatalogData", Ref("app.WeaponCatalogData", a[3]));
+    comp.SetFieldValue("WeaponSetting", Ref("app.WeaponSetting", a[4]));
+    pfb.AddComponent(root, comp);
+    pfb.RebuildInfoTables();
+    if (!pfb.WriteTo(a[2])) return Fail("write failed");
+    var back = LoadPfb(a[2]);
+    foreach (var go in back.GameObjects) PrintGo(go, "");
+    return ScnFind(new[] { "scn-find", a[2], "app.WeaponCatalogRegister" });
+}
+
+// Members of a REE-Lib type (constructors, properties, fields, methods): for writing new commands against the library.
+static int Reflect(string typeName) {
+    var t = typeof(ReeLib.PfbFile).Assembly.GetTypes().FirstOrDefault(x => x.FullName == typeName || x.Name == typeName);
+    if (t == null) return Fail("no type " + typeName);
+    Console.WriteLine(t.FullName);
+    foreach (var c in t.GetConstructors()) Console.WriteLine("  ctor(" + string.Join(", ", c.GetParameters().Select(p => p.ParameterType.Name + " " + p.Name)) + ")");
+    foreach (var m in t.GetMembers(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly))
+        if (m is not ConstructorInfo && !(m is MethodInfo mi && mi.IsSpecialName)) Console.WriteLine("  " + m.MemberType + " " + m);
     return 0;
 }
 
