@@ -297,7 +297,7 @@ def describe_obj(o, fields=True, limit=200):
     return f"{name} {str(keep)[:limit]}"
 
 
-def describe(tree, node, detail=True):
+def describe(tree, node, detail=True, width=200):
     out = [f"{node['full']}  [id {node['id']:#x}{'/' + str(node['ex']) if node['ex'] else ''}, attr {node['attr']:#x}"
            f"{', branch' if node.get('isBranch') else ''}{', end' if node.get('isEnd') else ''}]"]
     if node["selector"] >= 0:
@@ -306,7 +306,7 @@ def describe(tree, node, detail=True):
     if not node["callerCond"].none:
         out.append(f"  selector caller condition: {tree.cond_text(node['callerCond'])}")
     for a, o in zip(node["actions"], tree.actions_of(node)):
-        out.append(f"  action {a[0]:#x}: {describe_obj(o, detail)}")
+        out.append(f"  action {a[0]:#x}: {describe_obj(o, detail, width)}")
     for c in node["children"]:
         ch = tree.by_id.get(c["id"])
         cond = "" if c["cond"].none else "  if " + tree.cond_text(c["cond"])

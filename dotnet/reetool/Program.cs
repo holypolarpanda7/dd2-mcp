@@ -38,6 +38,8 @@ try {
         "scn-find" => ScnFind(args),
         "reflect" => Reflect(args[1]),
         "mdf-graft" => MdfGraft(args),
+        "mot-clips" => MotClips(args),
+        "motbank-list" => MotbankList(args),
         "pfb-add-weaponreg" => PfbAddWeaponReg(args),
         "user-swap" => UserSwap(args),
         "user-list" => UserList(args),
@@ -350,6 +352,56 @@ static int MdfInfo(string path, bool full) {
         // slot numbers are what Mesh:setMaterialTexture(material, slot, ...) and setMaterialFloat/Float4(material, index, ...) take at runtime
         for (int i = 0; i < m.Textures.Count; i++) Console.WriteLine($"  tex[{i}] {m.Textures[i].texType} = {m.Textures[i].texPath}");
         for (int i = 0; i < m.Parameters.Count; i++) { var p = m.Parameters[i]; Console.WriteLine($"  param[{i}] {p.paramName} x{p.componentCount} = ({p.parameter.X:0.###}, {p.parameter.Y:0.###}, {p.parameter.Z:0.###}, {p.parameter.W:0.###})"); }
+    }
+    return 0;
+}
+
+// A motion bank's entries: which motlist answers a BankID (an FSM action's "_BankID" / "v3_BankID").
+static int MotbankList(string[] a) {
+    if (a.Length < 2) return Fail("usage: motbank-list <motbank>");
+    var mb = new ReeLib.MotbankFile(new FileHandler(a[1], false));
+    if (!mb.Read()) return Fail("read failed: " + a[1]);
+    foreach (var e in mb.MotlistItems) Console.WriteLine($"{e.BankID}\t{e.BankType}\t{e.Path}");
+    return 0;
+}
+
+// A motion's embedded clips: the timeline tracks the game runs WITH the animation (effect, sound, shell, collision ... requests
+// keyed on frames). usage: mot-clips <motlist> [motion name regex] [--max N]. Prints per motion: each clip's track tree, every
+// property (name, frame span, type) and its keys (frame = value). Used to see how a skill stitches its VFX / SFX / shells together.
+static int MotClips(string[] a) {
+    if (a.Length < 2) return Fail("usage: mot-clips <motlist> [motion regex] [--max N]");
+    var ml = new ReeLib.MotlistFile(new FileHandler(a[1], false));
+    if (!ml.Read()) return Fail("read failed: " + a[1]);
+    var rx = a.Length > 2 && !a[2].StartsWith("--") ? new System.Text.RegularExpressions.Regex(a[2], System.Text.RegularExpressions.RegexOptions.IgnoreCase) : null;
+    int max = 400; int mi = Array.IndexOf(a, "--max"); if (mi > 0 && mi + 1 < a.Length) max = int.Parse(a[mi + 1]);
+    int shown = 0;
+    void Prop(ReeLib.Clip.Property p, string ind) {
+        var i = p.Info;
+        var keys = p.Keys == null ? "" : string.Join("  ", p.Keys.Take(12).Select(k => $"{k.frame:0.#}={k}"));
+        Console.WriteLine($"{ind}- {i.FunctionName} [{i.startFrame:0.#}-{i.endFrame:0.#}] {i.DataType}{(keys.Length > 0 ? "  " + keys : "")}");
+        if (p.ChildProperties != null) foreach (var c in p.ChildProperties) Prop(c, ind + "  ");
+    }
+    void Track(ReeLib.Clip.ClipTrack t, string ind) {
+        Console.WriteLine($"{ind}TRACK {t.Name} [{t.startFrame:0.#}-{t.endFrame:0.#}]");
+        if (t.Properties != null) foreach (var p in t.Properties) Prop(p, ind + "  ");
+        if (t.ChildTracks != null) foreach (var c in t.ChildTracks) Track(c, ind + "  ");
+    }
+    foreach (var m in ml.Motions) {
+        var mf = m.MotFile as ReeLib.MotFile;
+        var name = m.MotFile?.Name ?? "?";
+        if (rx != null && !rx.IsMatch(name) && !rx.IsMatch("#" + m.motNumber)) continue;   // a name, or "#<motion number>" (FSM v4_MotionID)
+        if (shown++ >= max) break;
+        var clips = new List<ReeLib.Mot.MotClip>();
+        if (mf != null) clips.AddRange(mf.Clips);
+        clips.AddRange(m.OverrideClips);
+        Console.WriteLine($"MOT {name} (#{m.motNumber}) clips={clips.Count}");
+        foreach (var c in clips) {
+            var e = c.ClipEntry;
+            if (e == null) continue;
+            Console.WriteLine($"  CLIP main={c.MainTrackName} frames={e.FrameCount:0.#} tracks={e.Tracks.Count}");
+            var roots = e.Tracks.Where(t => t.Name == "Root").ToList();     // the tree once (Tracks also lists every track flat)
+            foreach (var t in roots.Count > 0 ? roots : e.Tracks) { try { Track(t, "    "); } catch (Exception ex) { Console.WriteLine("    (track error: " + ex.Message + ")"); } }
+        }
     }
     return 0;
 }

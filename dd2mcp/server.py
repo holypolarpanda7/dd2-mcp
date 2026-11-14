@@ -380,11 +380,11 @@ def dd2_rsz_file(path: str, find: str = "", show: str = "", depth: int = 2, limi
 
 @mcp.tool()
 def dd2_bhvt(path: str, node: str = "", action: str = "", tree: bool = False, depth: int = 3, detail: bool = True,
-             limit: int = 30) -> str:
+             limit: int = 30, width: int = 200) -> str:
     """Read a behavior tree (.bhvt, or the tree inside a .motfsm2: player = natives/stm/appsystem/ch/ch000/motionfsm/
     ch000000.motfsm2.45 (full body, layer 0) and ch000000_upperbody.motfsm2.45 (layer 1)) from the paks or a local
     file. node: regex on full node paths (e.g. 'PsychoShoot$') -> each match with its selector, actions (decoded RSZ
-    objects), children with conditions, FSM states/start transitions with conditions and events. action: regex on
+    objects, cut at `width` chars), children with conditions, FSM states/start transitions with conditions and events. action: regex on
     action type names -> nodes running them. tree=True: the matching node's subtree as an indented outline, `depth`
     levels. No node/action: summary (node count, top-level states, condition/state counts)."""
     import re as _re
@@ -429,7 +429,7 @@ def dd2_bhvt(path: str, node: str = "", action: str = "", tree: bool = False, de
             for m in matches[:3]:
                 outline(m, 0, out)
             return "\n".join(out)
-        out = [bhvt.describe(T, n, detail) for n in matches[:limit]]
+        out = [bhvt.describe(T, n, detail, width) for n in matches[:limit]]
         if len(matches) > limit:
             out.append(f"... {len(matches) - limit} more")
         return "\n\n".join(out)
@@ -859,6 +859,103 @@ def dd2_refcount(expr: str, call: str = "", wait: float = 1.5) -> str:
                           "local ok = pcall(function() return sdk.to_managed_object(a):get_type_definition():get_full_name() end)\n"
                           "return string.format('after %.1f s: %d, valid %s', " + str(float(wait)) + ", r, tostring(ok))", phase="update")
     return "\n".join(str(v) for v in (first.get("ret") or []) + (later.get("ret") or [later.get("err")]))
+
+
+_ANATOMY = {}
+
+
+def _anatomy_tables():
+    """Bank id -> motlist path (player motion banks) and Wwise RequestID -> TriggerId (the human reference table list)."""
+    if _ANATOMY:
+        return _ANATOMY
+    import tempfile
+    from . import pak, ree
+    banks = {}
+    d = pathlib.Path(tempfile.mkdtemp())
+    for mb in ("natives/stm/appsystem/ch/common/human/motionbank/humancommon.motbank.4",
+               "natives/stm/appsystem/ch/common/human/motionbank/humancommon_contents0014.motbank.4"):
+        f = pak.find(mb)
+        if not f:
+            continue
+        p = d / pathlib.Path(mb).name
+        p.write_bytes(f[1])
+        for line in ree.run("motbank-list", p).splitlines():
+            parts = line.split("\t")
+            if len(parts) == 3 and parts[0].isdigit():
+                banks.setdefault(int(parts[0]), parts[2])
+    req = {}
+    ref = dd2_rsz_file("natives/stm/sound/resource/hm/hm_requestreferencetablelistdata.user.3", find=".", limit=80)
+    for m in re.finditer(r"'_path': '([^']+)'", ref):
+        path = "natives/stm/" + m.group(1).lower() + ".3"
+        kind = "Voice" if "Voice" in m.group(1) else "Weapon" if "/WEP/" in m.group(1) else "Se"
+        t = dd2_table(path, cols="_RequestID,_TriggerId", limit=2000, width=20)
+        for line in t.splitlines():
+            f2 = line.split("\t")
+            if len(f2) >= 3 and f2[0].isdigit():
+                try:
+                    req.setdefault((kind, int(f2[1])), []).append((int(f2[2]), pathlib.Path(path).name))
+                except ValueError:
+                    pass
+    _ANATOMY.update(banks=banks, req=req)
+    return _ANATOMY
+
+
+@mcp.tool()
+def dd2_skill_anatomy(node: str, layer: str = "upper", clips: bool = True, limit: int = 6) -> str:
+    """How a player skill is stitched together, from game data (no game needed): the motion-FSM node(s) matching `node`
+    (regex, e.g. 'FireBoon') with their actions, then for every motion an action plays (v3_BankID/v4_MotionID -> motion bank ->
+    motlist) that motion's embedded clips: permission windows (app.PlayerTrack), effects over frame ranges
+    (via.effect.script.VFXRangeTrack: EffectId = ContainerID-ElementID in DataContainerId, e.g. 300 = the player's skill
+    effect set; the live manager maps the id with getExternalDataContainerIndexFromId), sounds (Wwise*RefTableTriggerTracks
+    RequestId, resolved here to the trigger id through the human reference table list: hm_requestreferencetablelistdata),
+    shells, camera, speed. Effects/sounds an ACTION requests itself (e.g. Job03PrepareMagic StartElementID, HumanReadySpell
+    EffectElementID / SpellSETriggerName, Job03CastBoon) show in the action fields. layer: 'upper' (layer 1) or 'full' (layer 0).
+    DnD_Classes 2026-11-13: mapped Fire Boon (the rune ring = HumanReadySpell's lock-on UI; the crackle = Job03CastBoon's enchant)."""
+    import tempfile
+    from . import pak, ree
+    fsm = ("natives/stm/appsystem/ch/ch000/motionfsm/ch000000_upperbody.motfsm2.45" if layer == "upper"
+           else "natives/stm/appsystem/ch/ch000/motionfsm/ch000000.motfsm2.45")
+    nodes = dd2_bhvt(fsm, node=node, limit=limit, detail=True, width=3000)
+    out = ["=== FSM nodes (" + layer + ")", nodes]
+    if not clips:
+        return "\n".join(out)
+    T = _anatomy_tables()
+    mots = []
+    for m in re.finditer(r"'(?:v3_BankID|LoopBankID)': (\d+), '(?:v4_MotionID|LoopMotionID)': (\d+)", nodes):
+        k = (int(m.group(1)), int(m.group(2)))
+        if k not in mots:
+            mots.append(k)
+    d = pathlib.Path(tempfile.mkdtemp())
+    for bank, mid in mots:
+        ml = T["banks"].get(bank)
+        if not ml:
+            out.append(f"=== motion bank {bank} #{mid}: bank not in the human motion banks")
+            continue
+        path = "natives/stm/" + ml.lower() + ".1057"
+        f = pak.find(path)
+        if not f:
+            out.append(f"=== {path}: not found")
+            continue
+        p = d / pathlib.Path(path).name
+        if not p.exists():
+            p.write_bytes(f[1])
+        dump = ree.run("mot-clips", p, f"^#{mid}$")
+        lines = []
+        cur = ""
+        for line in dump.splitlines():
+            if "TRACK " in line:
+                cur = line.strip()
+            if "RequestId" in line and "Wwise" in cur:
+                kind = next((k for k in ("Voice", "Weapon") if k in cur), "Se")
+                def _res(mm, kind=kind):
+                    r = T["req"].get((kind, int(mm.group(1))))
+                    return mm.group(0) + (" -> " + ", ".join(f"trigger {t} ({n})" for t, n in r[:4]) if r
+                                          else f" -> (no {kind} table entry)")
+                line = re.sub(r"(?<=: )(\d+)\b", _res, line)
+            lines.append(line)
+        out.append(f"=== motion bank {bank} ({ml}) #{mid}")
+        out.append("\n".join(lines))
+    return "\n".join(out)
 
 
 @mcp.tool()

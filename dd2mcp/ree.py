@@ -45,7 +45,7 @@ def run(*args, timeout: int = 600) -> str:
     if err:
         return err
     cmd = [str(DOTNET), winpath(DLL)] + [winpath(a) if isinstance(a, pathlib.Path) or str(a).startswith("/") else str(a) for a in args]
-    r = subprocess.run(cmd, capture_output=True, text=True, env=_env(), timeout=timeout)
+    r = subprocess.run(cmd, capture_output=True, text=True, errors="replace", env=_env(), timeout=timeout)
     out = (r.stdout + ("\n" + r.stderr if r.stderr.strip() else "")).strip()
     # drop REE-Lib's chatty log lines
     out = "\n".join(l for l in out.splitlines() if "[I]" not in l)
