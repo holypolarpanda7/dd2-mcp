@@ -862,6 +862,50 @@ def dd2_refcount(expr: str, call: str = "", wait: float = 1.5) -> str:
 
 
 @mcp.tool()
+def dd2_effect_trace(seconds: float = 3.0, filter: str = "") -> str:
+    """Which effects get requested, on whose effect manager, while you act (e.g. start a charge meanwhile): owner GameObject,
+    method and EffectID as DataContainerIndex:ContainerID:ElementID; motion range tracks (createEffectFromRangeSquence) show
+    their track's EffectId / DataContainerId. filter = Lua pattern on the owner name. Then tint or kill those effects:
+    ObjectEffectManager2.getCreatedEffectFromEffectID(id) -> CreatedEffectContainer -> getAllPlayers() set_Color / killAll().
+    The EffectID argument arrives boxed: its fields sit 16 bytes in (DnD_Classes 2026-11-13: channel wind-up, swing arcs)."""
+    install = r'''if not D._fxtrace then D._fxtrace = { on = false, log = {} }
+  for _, tn in ipairs({ "via.effect.script.ObjectEffectManager2", "via.effect.script.ObjectEffectManagerBase" }) do
+    for _, m in ipairs(sdk.find_type_definition(tn):get_methods()) do
+      local n = m:get_name()
+      if (n:find("^requestEffect") or n == "createEffectFromRangeSquence") and n ~= "requestEffectFromRangeSquence" then
+        local ps = m:get_param_types(); local sig = n .. "(" .. #ps .. ")"
+        pcall(sdk.hook, m, function(args)
+          local T = D._fxtrace
+          if not T.on then return end
+          pcall(function()
+            local em = sdk.to_managed_object(args[2]); local go = em:call("get_GameObject"); local owner = go and go:call("get_Name") or "?"
+            if T.filter ~= "" and not owner:find(T.filter) then return end
+            local idtxt = ""
+            if n == "createEffectFromRangeSquence" then
+              local tr = sdk.to_managed_object(args[3]); idtxt = "track " .. tostring(tr:get_field("EffectId")) .. " dc " .. tostring(tr:get_field("DataContainerId"))
+            elseif ps[1] and ps[1]:get_full_name() == "via.effect.script.EffectID" then
+              local a = sdk.to_int64(args[3])
+              local function rd(o) return sdk.to_valuetype(a + o, "System.Int32"):read_dword(0) end
+              idtxt = string.format("%d:%d:%d", rd(16), rd(20), rd(24))
+            end
+            T.log[#T.log + 1] = string.format("%.2f %s %s %s", os.clock() - T.t0, owner, sig, idtxt)
+          end)
+        end, function(r) return r end)
+      end
+    end
+  end
+end
+D._fxtrace.log = {}; D._fxtrace.filter = FILTER; D._fxtrace.t0 = os.clock(); D._fxtrace.on = true
+return "armed"'''
+    r = game.eval_lua("local FILTER = " + json.dumps(filter) + "\n" + install, phase="update")
+    if not r.get("ok"):
+        return game.format_result(r)
+    time.sleep(max(0.2, seconds))
+    r = game.eval_lua("D._fxtrace.on = false; local l = D._fxtrace.log; return #l .. ' requests\\n' .. table.concat(l, '\\n', 1, math.min(#l, 200))", phase="frame")
+    return game.format_result(r)
+
+
+@mcp.tool()
 def dd2_sound_trace(seconds: float = 4.0, filter: str = "") -> str:
     """Which object fires which Wwise sound trigger, live, for `seconds` (do the action meanwhile, e.g. dd2_keys 'x'). Hooks
     soundlib.SoundContainer.trigger(UInt32, GameObject, ...) once (flag-gated, installed on first use) and logs time, owner
