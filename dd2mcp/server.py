@@ -959,6 +959,17 @@ def dd2_skill_anatomy(node: str, layer: str = "upper", clips: bool = True, limit
 
 
 @mcp.tool()
+def dd2_sound_loops(ids: str, lists: str = "") -> str:
+    """Which Wwise trigger ids LOOP FOREVER if played standalone (no game needed): ids = space/comma separated trigger ids ->
+    event (the player's SoundTriggerInfoListData files, or `lists` = space separated 'SKILL/MGC_SKILL/MGC_SKILL'-style stems) ->
+    its sounds/containers (walked downward) -> Wwise property 0x3A Loop (0 = infinite). A looping cue only ends through its own
+    stop cue or its emitter's death: never play one standalone on a character (DnD_Classes 2026-11-14: even stopAll did not end it).
+    Trigger ids = murmur3(UTF-16LE name, seed 0xFFFFFFFF)."""
+    from . import soundloop
+    return soundloop.audit([int(x) for x in re.split(r"[\s,]+", ids.strip()) if x], lists.split() or None)
+
+
+@mcp.tool()
 def dd2_effect_trace(seconds: float = 3.0, filter: str = "") -> str:
     """Which effects get requested, on whose effect manager, while you act (e.g. start a charge meanwhile): owner GameObject,
     method and EffectID as DataContainerIndex:ContainerID:ElementID; motion range tracks (createEffectFromRangeSquence) show
