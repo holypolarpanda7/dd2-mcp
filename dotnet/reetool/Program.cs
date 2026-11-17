@@ -46,6 +46,7 @@ try {
         "anim-export" => AnimExport(args),
         "anim-import" => AnimImport(args),
         "motlist-build" => MotlistBuild(args),
+        "mot-offset" => MotOffset(args),
         "pfb-add-weaponreg" => PfbAddWeaponReg(args),
         "user-swap" => UserSwap(args),
         "user-list" => UserList(args),
@@ -488,7 +489,7 @@ static int AnimExport(string[] a) {
 // FBX / glTF animations -> a motlist (Content Editor's Assimp importer). Each animation becomes one motion (numbered 0..n in file
 // order; renumber with motlist-build). usage: anim-import <in.fbx|in.glb> <out.motlist> [--template <game motlist>]
 static int AnimImport(string[] a) {
-    if (a.Length < 3) return Fail("usage: anim-import <in.fbx|in.glb> <out.motlist> [--base <game motlist>:<n>] [--drop-clips]");
+    if (a.Length < 3) return Fail("usage: anim-import <in.fbx|in.glb> <out.motlist> [--base <game motlist>:<n>] [--base-map <file>] [--drop-clips]");
     var ws = AnimWs();
     using var ctx = new Assimp.AssimpContext();
     var scene = ctx.ImportFile(a[1], Assimp.PostProcessSteps.None);
@@ -506,18 +507,29 @@ static int AnimImport(string[] a) {
     // bone list, event clips such as the hand-pose track, version) stays the game's. Imported translations on other bones (the export
     // body's bone lengths) are dropped: game motions are rotation-only there so retargeting can fit every body size.
     int bi = Array.IndexOf(a, "--base");
-    if (bi > 0) {
-        var spec = a[bi + 1]; var cut = spec.LastIndexOf(':');
-        string basePath = spec[..cut]; ushort baseNum = ushort.Parse(spec[(cut + 1)..]);
+    int bm = Array.IndexOf(a, "--base-map");     // a file: lines "<animation name substring>\t<motlist>:<n>[\t<out number>]"
+    if (bi > 0 || bm > 0) {
+        var map = new List<(string key, string path, ushort num, int outNum)>();
+        if (bm > 0) foreach (var line in File.ReadAllLines(a[bm + 1])) {
+            var f = line.Split('\t'); if (f.Length < 2 || line.StartsWith("#")) continue;
+            var c2 = f[1].LastIndexOf(':');
+            map.Add((f[0], f[1][..c2], ushort.Parse(f[1][(c2 + 1)..]), f.Length > 2 ? int.Parse(f[2]) : -1));
+        }
+        string defPath = ""; ushort defNum = 0;
+        if (bi > 0) { var spec = a[bi + 1]; var cut = spec.LastIndexOf(':'); defPath = spec[..cut]; defNum = ushort.Parse(spec[(cut + 1)..]); }
         bool dropClips = a.Contains("--drop-clips");
-        var outMl = new ReeLib.MotlistFile(new FileHandler(basePath, false)); if (!outMl.Read()) return Fail("base read failed");
-        var tmpl = outMl.Motions.FirstOrDefault(x => x.motNumber == baseNum); if (tmpl == null) return Fail($"no #{baseNum} in base");
+        var outMl = new ReeLib.MotlistFile(new FileHandler(bi > 0 ? defPath : map[0].path, false)); if (!outMl.Read()) return Fail("base read failed");
         outMl.Motions.Clear();
         ushort num = 0;
         foreach (var im2 in ml.Motions) {
             if (im2.MotFile is not ReeLib.MotFile src) continue;
+            var nm = src.Name ?? "";
+            var hit = map.Where(m => nm.Contains(m.key)).OrderByDescending(m => m.key.Length).FirstOrDefault();
+            string basePath = hit.key != null ? hit.path : defPath; ushort baseNum = hit.key != null ? hit.num : defNum;
+            if (basePath == "") { Console.WriteLine($"skip {nm}: no base"); continue; }
             var fresh = new ReeLib.MotlistFile(new FileHandler(basePath, false)); fresh.Read();     // a new copy of the base motion per import
-            var mi = fresh.Motions.First(x => x.motNumber == baseNum);
+            var mi = fresh.Motions.FirstOrDefault(x => x.motNumber == baseNum);
+            if (mi == null) { Console.WriteLine($"skip {nm}: no #{baseNum} in {basePath}"); continue; }
             var dst = (ReeLib.MotFile)mi.MotFile!;
             var srcBy = src.BoneClips.GroupBy(c => c.ClipHeader.boneName ?? "").ToDictionary(g => g.Key, g => g.First());
             int grafted = 0;
@@ -530,14 +542,15 @@ static int AnimImport(string[] a) {
             }
             dst.Header.frameCount = src.Header.frameCount; dst.Header.endFrame = src.Header.endFrame; dst.Header.startFrame = src.Header.startFrame;
             if (dropClips) { dst.Clips.Clear(); mi.OverrideClips.Clear(); }
-            var name = src.Name ?? ("custom_" + num);
+            var name = (src.Name ?? ("custom_" + num)).Replace("Armature|", "").Trim('|');
             dst.Name = name; dst.Header.motName = name;
-            mi.motNumber = num++;
+            mi.motNumber = hit.key != null && hit.outNum >= 0 ? (ushort)hit.outNum : num; num++;
             outMl.Motions.Add(mi);
             Console.WriteLine($"graft #{mi.motNumber} {name}: {grafted} rotation tracks into base #{baseNum} ({dst.BoneClips.Count} bones, frames {dst.Header.frameCount})");
         }
         ml = outMl;
     }
+    ml.Motions.Sort((x, y) => x.motNumber.CompareTo(y.motNumber));     // binary-searched by the engine: keep sorted
     Console.WriteLine($"written={ml.WriteTo(a[2])}");
     return 0;
 }
@@ -569,9 +582,53 @@ static int MotlistBuild(string[] a) {
         outMl.Motions.Add(mi);
         Console.WriteLine($"#{to} <- {Path.GetFileName(src)} #{from} {mi.MotFile?.Name}");
     }
+    // The engine finds a motion number by binary search: a motlist MUST be sorted by motNumber (2026-11-17: an unsorted list
+    // played some numbers and silently fell back to the game's motion for others).
+    outMl.Motions.Sort((x, y) => x.motNumber.CompareTo(y.motNumber));
     Console.WriteLine($"written={outMl.WriteTo(a[1])}");
     var check = new ReeLib.MotlistFile(new FileHandler(a[1], false));
     Console.WriteLine($"reread={check.Read()} motions={check.Motions.Count}: {string.Join(", ", check.Motions.Select(m => "#" + m.motNumber + " " + m.MotFile?.Name))}");
+    return 0;
+}
+
+// Constant per-bone rotation offsets applied straight to motion data (no Blender: every other bone, frame and clip stays exact).
+// key' = key * offset (the bone's LOCAL axes; same convention as tools/anim/edit_offsets.py in Blender: X twists along the bone).
+// usage: mot-offset <in.motlist> <out.motlist> <spec.json> [--numbers <regex on "#n name">]
+// spec.json: {"<bone>": [["Z", 40], ["Y", -5]], ...}. Motions not matched by --numbers are dropped from the output.
+static int MotOffset(string[] a) {
+    if (a.Length < 4) return Fail("usage: mot-offset <in.motlist> <out.motlist> <spec.json> [--numbers <regex>]");
+    var ml = new ReeLib.MotlistFile(new FileHandler(a[1], false));
+    if (!ml.Read()) return Fail("read failed: " + a[1]);
+    var spec = System.Text.Json.JsonDocument.Parse(File.ReadAllText(a[3])).RootElement;
+    var offs = new Dictionary<string, System.Numerics.Quaternion>();
+    foreach (var bone in spec.EnumerateObject()) {
+        var q = System.Numerics.Quaternion.Identity;
+        foreach (var r in bone.Value.EnumerateArray()) {
+            var axis = r[0].GetString() switch { "X" => System.Numerics.Vector3.UnitX, "Y" => System.Numerics.Vector3.UnitY, _ => System.Numerics.Vector3.UnitZ };
+            q = q * System.Numerics.Quaternion.CreateFromAxisAngle(axis, (float)(r[1].GetDouble() * Math.PI / 180));
+        }
+        offs[bone.Name] = q;
+    }
+    int ni = Array.IndexOf(a, "--numbers");
+    var rx = ni > 0 ? new System.Text.RegularExpressions.Regex(a[ni + 1]) : null;
+    if (rx != null) ml.Motions.RemoveAll(m => !rx.IsMatch($"#{m.motNumber} {m.MotFile?.Name}"));
+    int tracks = 0, keys = 0;
+    foreach (var m in ml.Motions) {
+        if (m.MotFile is not ReeLib.MotFile mf) continue;
+        foreach (var c in mf.BoneClips) {
+            if (!c.HasRotation || c.Rotation?.rotations == null) continue;
+            if (!offs.TryGetValue(c.ClipHeader.boneName ?? "", out var off)) continue;
+            var rs = c.Rotation.rotations;
+            // System.Numerics: a * b applies b first then a; the Blender convention q @ off = rotate by off in the bone's local
+            // frame, then by q. In System.Numerics terms that product is Quaternion.Concatenate(off, q) = q * off.
+            for (int i = 0; i < rs.Length; i++) { rs[i] = System.Numerics.Quaternion.Normalize(rs[i] * off); keys++; }
+            tracks++;
+        }
+    }
+    int si = Array.IndexOf(a, "--suffix");          // rename every motion (+suffix) so a live layer dump shows which list answered
+    if (si > 0) foreach (var m in ml.Motions) if (m.MotFile is ReeLib.MotFile mf2) { mf2.Name = (mf2.Name ?? "") + a[si + 1]; mf2.Header.motName = mf2.Name; }
+    ml.Motions.Sort((x, y) => x.motNumber.CompareTo(y.motNumber));
+    Console.WriteLine($"offset {tracks} tracks, {keys} keys in {ml.Motions.Count} motions; written={ml.WriteTo(a[2])}");
     return 0;
 }
 

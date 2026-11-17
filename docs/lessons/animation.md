@@ -28,16 +28,51 @@ same for chairs (`Human.addMotionBankOnSitChair`). Holder: `sdk.create_resource(
 - One dynamic bank per (BankID, type, mask): a drawn stance, a sheathed stance and an attack bank are three banks.
 - Ship your motlist as a NEW file in your pak (`natives/stm/animation/<mod>/x.motlist.1057`): new files are not checksum-checked.
 
+## A motlist MUST be sorted by motion number
+The engine finds a motion number by binary search. An unsorted list (motions appended in any order) plays SOME numbers and
+silently falls back to the game's motion for others: the same file worked for #0/#33 and not for #20/#30 (2026-11-17). reetool
+`motlist-build`, `anim-import` and `mot-offset` sort before writing.
+
+## When an override applies
+- A motion resolves its list when it STARTS. Adding a bank changes nothing until the next motion change (draw, sheathe, idle
+  switch, move start).
+- The draw motion is resolved with the DRAWN bank type (it already plays the weapon's #30 while the character still counts as
+  sheathed), so a drawn-type bank overrides the draw too.
+
 ## Event clips ride on motions
 Motions carry clips that drive gameplay: cancel windows (`app.PlayerTrack`), the frame a weapon moves hip -> hand
 (`app.SheatheDrawTrack`), look-at, sounds (Wwise ref-table tracks), effects (VFX range tracks), and for attacks shell requests.
 Replacing a motion replaces its clips: keep the base motion's clips (graft) and re-time them if the length changes.
 
+## Changing an existing motion without Blender: `mot-offset`
+Constant per-bone rotation offsets (open a fist, raise an arm) applied straight to the motion data: key' = key * offset in the
+bone's local axes. Every other bone, key count, frame and clip stays byte-identical, and a whole list (118 attack motions) takes
+seconds. Same numbers as the Blender route (verified to 3 decimals). `--numbers` picks motions, `--suffix` renames them so a live
+layer dump shows your list answered.
+
+Bone local axes of the DD2 human (measured with blender/axis_probe.py; X always twists along the bone):
+| bone | Y | Z |
+|---|---|---|
+| L/R_Arm_Upper | Y- swings the arm forward, Y+ back/down | left Z+ raises outward; right Z- brings it in to the body |
+| L/R_Arm_Lower (elbow) | Y- bends, Y+ straightens | sideways |
+| fingers (*_IndexF/MiddleF/RingF/PinkyF_1..3) | sideways spread | Z+ opens (uncurls), Z- curls |
+| thumb (*_ThumbF_1/2) | Y- out sideways | Z+ lifts the thumb out |
+
+## Judging motions without the game
+`blender/render_poses.py` (headless Blender): an FBX's animations as pose sheets (3 views x N frames, auto-framed) +
+`blender/sheet.py`; `blender/axis_probe.py` renders one bone's +/- offsets on each axis (close-up option for hands);
+`blender/edit_offsets.py` layers offsets in Blender, with ramps (fade in/out) and trims, for motions built from another source.
+Freeze-frame a pose in game: `GameObject.set_UpdateSelf(false)` holds it; the camera can't swing then (it reads input through the
+player), so turn the frozen body to face the camera instead.
+
 ## Authoring pipeline
 1. `dd2_anim export` -> FBX (Content Editor's exporter, game mesh as skeleton).
-2. Blender: import FBX (automatic_bone_orientation off). Bones point along local X: a rotation about X is a twist. Set the scene to
-   60 fps before exporting (motions are 60 fps; Blender defaults to 24). Export FBX with baked animation, no leaf bones.
-3. `dd2_anim import` with a base motion: graft the file's rotations (+ root/Hip translation) into a copy of a game motion. A plain
+2. Blender: import FBX (automatic_bone_orientation off). The body imports at 1/100 scale (1.7 cm): mind camera clip planes. Bones
+   point along local X: a rotation about X is a twist. Blender 5 actions are layered (F-curves via the slot's channelbag:
+   blender/bl_common.py). Set the scene to 60 fps before exporting (motions are 60 fps; Blender defaults to 24). Export FBX with
+   baked animation, no leaf bones.
+3. `dd2_anim import` with a base motion (or reetool `anim-import --base-map <tsv>`: per animation name its own base motion and
+   output number): graft the file's rotations (+ root/Hip translation) into a copy of a game motion. A plain
    import drops prop and IK joints and writes the export body's bone lengths into every bone (game motions are rotation-only except
    root, Hip, props and IK, so retargeting fits every body size).
 4. `dd2_anim build` renumbers motions into your list; inject it with a dynamic bank.
