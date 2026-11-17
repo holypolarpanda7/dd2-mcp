@@ -40,6 +40,12 @@ try {
         "mdf-graft" => MdfGraft(args),
         "mot-clips" => MotClips(args),
         "motbank-list" => MotbankList(args),
+        "mot-list" => MotList(args),
+        "jmap-info" => JmapInfo(args),
+        "reflect-asm" => ReflectAsm(args),
+        "anim-export" => AnimExport(args),
+        "anim-import" => AnimImport(args),
+        "motlist-build" => MotlistBuild(args),
         "pfb-add-weaponreg" => PfbAddWeaponReg(args),
         "user-swap" => UserSwap(args),
         "user-list" => UserList(args),
@@ -361,7 +367,211 @@ static int MotbankList(string[] a) {
     if (a.Length < 2) return Fail("usage: motbank-list <motbank>");
     var mb = new ReeLib.MotbankFile(new FileHandler(a[1], false));
     if (!mb.Read()) return Fail("read failed: " + a[1]);
-    foreach (var e in mb.MotlistItems) Console.WriteLine($"{e.BankID}\t{e.BankType}\t{e.Path}");
+    foreach (var e in mb.MotlistItems) Console.WriteLine($"{e.BankID}\t{e.BankType}\t0x{e.BankTypeMaskBits:x}\t{e.Path}");
+    return 0;
+}
+
+// A motlist's motions: number (FSM v4_MotionID), name, frames, rate, joint mask, bones animated (which joints a motion drives).
+// usage: mot-list <motlist> [motion regex] [--bones] [--keys]. --bones: per animated bone the T/R/S tracks and key counts;
+// --keys: first keys of each track too (rest pose / hand poses).
+static int MotList(string[] a) {
+    if (a.Length < 2) return Fail("usage: mot-list <motlist> [motion regex] [--bones] [--keys]");
+    var ml = new ReeLib.MotlistFile(new FileHandler(a[1], false));
+    if (!ml.Read()) return Fail("read failed: " + a[1]);
+    var rx = a.Length > 2 && !a[2].StartsWith("--") ? new System.Text.RegularExpressions.Regex(a[2], System.Text.RegularExpressions.RegexOptions.IgnoreCase) : null;
+    bool bones = a.Contains("--bones"), keys = a.Contains("--keys");
+    Console.WriteLine($"motlist {ml.Header.version} motions={ml.Motions.Count}");
+    foreach (var m in ml.Motions) {
+        var name = m.MotFile?.Name ?? "?";
+        if (rx != null && !rx.IsMatch(name) && !rx.IsMatch("#" + m.motNumber)) continue;
+        var mf = m.MotFile as ReeLib.MotFile;
+        if (mf == null) { Console.WriteLine($"#{m.motNumber}\t{name}\t({m.MotFile?.GetType().Name})"); continue; }
+        var h = mf.Header;
+        var animated = mf.BoneClips.Select(c => {
+            var b = mf.Bones.FirstOrDefault(x => x.Index == c.ClipHeader.boneIndex) ?? mf.GetBoneByHash(c.ClipHeader.boneHash);
+            return (c, name: c.ClipHeader.boneName ?? b?.boneName ?? c.ClipHeader.boneHash.ToString("x8"));
+        }).ToList();
+        Console.WriteLine($"#{m.motNumber}\t{name}\tframes={h.frameCount:0.#} [{h.startFrame:0.#}-{h.endFrame:0.#}] rate={h.FrameRate} blend={h.blending:0.##} mask={m.jointMaskId} bones={h.boneCount} animated={h.boneClipCount} clips={mf.Clips.Count + m.OverrideClips.Count} jmap={h.jointMapPath}");
+        if (!bones) continue;
+        foreach (var (c, bn) in animated) {
+            string T(ReeLib.Mot.Track? t, string k) {
+                if (t == null) return "";
+                var s = $" {k}{t.keyCount}";
+                if (keys) {
+                    if (t.translations != null && t.translations.Length > 0) s += "(" + string.Join(" ", t.translations.Take(2).Select(v => $"{v.X:0.###},{v.Y:0.###},{v.Z:0.###}")) + ")";
+                    if (t.rotations != null && t.rotations.Length > 0) s += "(" + string.Join(" ", t.rotations.Take(2).Select(q => $"{q.X:0.###},{q.Y:0.###},{q.Z:0.###},{q.W:0.###}")) + ")";
+                }
+                return s;
+            }
+            Console.WriteLine($"    {bn}:{T(c.HasTranslation ? c.Translation : null, "T")}{T(c.HasRotation ? c.Rotation : null, "R")}{T(c.HasScale ? c.Scale : null, "S")}");
+        }
+    }
+    return 0;
+}
+
+// A joint map: joints (index, name, parent, rest offset) and the joint MASK groups the motion layers use (TreeLayer.JointMaskID):
+// which joints each mask lets through, with weights. usage: jmap-info <jmap> [--joints]
+static int JmapInfo(string[] a) {
+    var j = new ReeLib.JmapFile(new FileHandler(a[1], false));
+    if (!j.Read()) return Fail("read failed: " + a[1]);
+    try { j.UpdateJointNames(); } catch { }
+    var names = new Dictionary<uint, string>();
+    foreach (var g in j.MaskGroups) foreach (var m in g.Masks) if (!string.IsNullOrEmpty(m.jointName)) names[m.jointHash] = m.jointName;
+    Console.WriteLine($"joints={j.Joints.Count} maskGroups={j.MaskGroups.Count} ik={j.IkMotionData?.Count}");
+    if (a.Contains("--joints"))
+        for (int i = 0; i < j.Joints.Count; i++) {
+            var d = j.Joints[i];
+            Console.WriteLine($"  [{i}] {(names.TryGetValue(d.boneHash, out var n) ? n : d.boneHash.ToString("x8"))} parent={d.parentId}");
+        }
+    foreach (var g in j.MaskGroups) {
+        var on = g.Masks.Where(m => m.mask != 0 || m.weight > 0).ToList();
+        Console.WriteLine($"MASK {g.groupId}: {on.Count}/{g.Masks.Count} joints on");
+        Console.WriteLine("    " + string.Join(" ", on.Select(m => (m.jointName ?? m.jointHash.ToString("x8")) + (m.weight is > 0 and < 1 ? $"*{m.weight:0.##}" : ""))));
+    }
+    return 0;
+}
+
+// Methods of any assembly matching a regex (types or members): what a GUI tool (Content Editor) offers to call from code.
+// usage: reflect-asm <dll path> <regex>
+static int ReflectAsm(string[] a) {
+    var asm = System.Reflection.Assembly.LoadFrom(a[1]);
+    var rx = new System.Text.RegularExpressions.Regex(a[2]);
+    Type[] types;
+    try { types = asm.GetTypes(); } catch (System.Reflection.ReflectionTypeLoadException e) { types = e.Types.Where(t => t != null).ToArray()!; }
+    foreach (var t in types) {
+        bool tm = rx.IsMatch(t.FullName ?? "");
+        foreach (var m in t.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly)) {
+            if (m.Name.Contains('<')) continue;
+            if (!tm && !rx.IsMatch(m.Name)) continue;
+            string ps;
+            try { ps = string.Join(", ", m.GetParameters().Select(p => p.ParameterType.Name + " " + p.Name)); } catch { ps = "?"; }
+            string rt; try { rt = m.ReturnType.Name; } catch { rt = "?"; }
+            Console.WriteLine($"{t.FullName}.{m.Name}({ps}) -> {rt}{(m.IsStatic ? " [static]" : "")}");
+        }
+    }
+    return 0;
+}
+
+static void LoadAssimp() {
+    var ce = Environment.GetEnvironmentVariable("REE_CE_DIR") ?? @"D:\DD2Modding\Tools\ContentEditor";
+    var lib = Assimp.Unmanaged.AssimpLibrary.Instance;
+    if (!lib.IsLibraryLoaded) lib.LoadLibrary(Path.Combine(ce, "assimp.dll"));
+}
+
+static Workspace AnimWs() {
+    LoadAssimp();
+    var config = GameConfig.CreateFromRepository("dd2");
+    config.GamePath = Environment.GetEnvironmentVariable("REE_GAME_DIR") ?? @"D:\SteamLibrary\steamapps\common\Dragons Dogma 2";
+    return new Workspace(config);
+}
+
+// Motions -> FBX / glTF (Content Editor's exporter) on a mesh's skeleton, to edit in Blender.
+// usage: anim-export <mesh> <motlist> <out.fbx|out.glb> [motion regex]
+static int AnimExport(string[] a) {
+    if (a.Length < 4) return Fail("usage: anim-export <mesh> <motlist> <out.fbx|out.glb> [motion regex]");
+    var ws = AnimWs();
+    var mf = new MeshFile(new FileHandler(a[1], false));
+    if (!mf.Read()) return Fail("mesh read failed: " + a[1]);
+    var ml = new ReeLib.MotlistFile(new FileHandler(a[2], false));
+    if (!ml.Read()) return Fail("motlist read failed: " + a[2]);
+    var rx = a.Length > 4 ? new System.Text.RegularExpressions.Regex(a[4], System.Text.RegularExpressions.RegexOptions.IgnoreCase) : null;
+    var mots = ml.Motions.Where(m => m.MotFile is ReeLib.MotFile && (rx == null || rx.IsMatch(m.MotFile!.Name ?? "") || rx.IsMatch("#" + m.motNumber)))
+        .Select(m => (ReeLib.MotFile)m.MotFile!).ToList();
+    if (mots.Count == 0) return Fail("no motion matched");
+    var res = new CommonMeshResource(Path.GetFileNameWithoutExtension(a[1]), ws);
+    res.NativeMesh = mf;
+    res.ExportToFile(a[3], false, false, null, mots, null);
+    Console.WriteLine($"exported {mots.Count} motions: {string.Join(", ", mots.Select(m => m.Name))} -> {a[3]}");
+    return 0;
+}
+
+// FBX / glTF animations -> a motlist (Content Editor's Assimp importer). Each animation becomes one motion (numbered 0..n in file
+// order; renumber with motlist-build). usage: anim-import <in.fbx|in.glb> <out.motlist> [--template <game motlist>]
+static int AnimImport(string[] a) {
+    if (a.Length < 3) return Fail("usage: anim-import <in.fbx|in.glb> <out.motlist> [--base <game motlist>:<n>] [--drop-clips]");
+    var ws = AnimWs();
+    using var ctx = new Assimp.AssimpContext();
+    var scene = ctx.ImportFile(a[1], Assimp.PostProcessSteps.None);
+    var res = new CommonMeshResource(Path.GetFileNameWithoutExtension(a[1]), ws);
+    var im = typeof(CommonMeshResource).GetMethod("ImportAnimationsFromAssimp", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+    if (im == null) return Fail("ImportAnimationsFromAssimp not found in this Content Editor build");
+    var ml = im.Invoke(res, new object[] { scene, ReeLib.GameName.dd2 }) as ReeLib.MotlistFile;
+    if (ml == null) return Fail("import returned null");
+    foreach (var m in ml.Motions) {
+        var mf = m.MotFile as ReeLib.MotFile;
+        Console.WriteLine($"#{m.motNumber} {m.MotFile?.Name} frames={mf?.Header.frameCount} rate={mf?.Header.FrameRate} animated={mf?.BoneClips.Count}");
+    }
+    // --base <game motlist>:<motion number>: graft. Each imported animation is written INTO a copy of that game motion: its rotation
+    // tracks (and root/Hip translation) replace the base's for every bone the import animates; everything else (IK and prop joints,
+    // bone list, event clips such as the hand-pose track, version) stays the game's. Imported translations on other bones (the export
+    // body's bone lengths) are dropped: game motions are rotation-only there so retargeting can fit every body size.
+    int bi = Array.IndexOf(a, "--base");
+    if (bi > 0) {
+        var spec = a[bi + 1]; var cut = spec.LastIndexOf(':');
+        string basePath = spec[..cut]; ushort baseNum = ushort.Parse(spec[(cut + 1)..]);
+        bool dropClips = a.Contains("--drop-clips");
+        var outMl = new ReeLib.MotlistFile(new FileHandler(basePath, false)); if (!outMl.Read()) return Fail("base read failed");
+        var tmpl = outMl.Motions.FirstOrDefault(x => x.motNumber == baseNum); if (tmpl == null) return Fail($"no #{baseNum} in base");
+        outMl.Motions.Clear();
+        ushort num = 0;
+        foreach (var im2 in ml.Motions) {
+            if (im2.MotFile is not ReeLib.MotFile src) continue;
+            var fresh = new ReeLib.MotlistFile(new FileHandler(basePath, false)); fresh.Read();     // a new copy of the base motion per import
+            var mi = fresh.Motions.First(x => x.motNumber == baseNum);
+            var dst = (ReeLib.MotFile)mi.MotFile!;
+            var srcBy = src.BoneClips.GroupBy(c => c.ClipHeader.boneName ?? "").ToDictionary(g => g.Key, g => g.First());
+            int grafted = 0;
+            foreach (var c in dst.BoneClips) {
+                var n = c.ClipHeader.boneName ?? "";
+                if (!srcBy.TryGetValue(n, out var sc)) continue;
+                if (n.Contains("Prop") || n.Contains("IK") || n == "GroundAngle") continue;   // attach points and IK targets stay the game's
+                if (sc.HasRotation && c.HasRotation) { c.Rotation = sc.Rotation; grafted++; }
+                if ((n == "root" || n == "Hip") && sc.HasTranslation && c.HasTranslation) c.Translation = sc.Translation;
+            }
+            dst.Header.frameCount = src.Header.frameCount; dst.Header.endFrame = src.Header.endFrame; dst.Header.startFrame = src.Header.startFrame;
+            if (dropClips) { dst.Clips.Clear(); mi.OverrideClips.Clear(); }
+            var name = src.Name ?? ("custom_" + num);
+            dst.Name = name; dst.Header.motName = name;
+            mi.motNumber = num++;
+            outMl.Motions.Add(mi);
+            Console.WriteLine($"graft #{mi.motNumber} {name}: {grafted} rotation tracks into base #{baseNum} ({dst.BoneClips.Count} bones, frames {dst.Header.frameCount})");
+        }
+        ml = outMl;
+    }
+    Console.WriteLine($"written={ml.WriteTo(a[2])}");
+    return 0;
+}
+
+// Compose a motlist from motions of other motlists, renumbered: the file a DynamicMotionBank (or a motbank entry) points at to
+// override motion numbers. usage: motlist-build <out.motlist> <template.motlist> <src.motlist>:<srcNumber>=<newNumber>[:<newName>] ...
+// The template supplies the header/version (any game motlist of the same version); its own motions are dropped.
+static int MotlistBuild(string[] a) {
+    if (a.Length < 4) return Fail("usage: motlist-build <out.motlist> <template.motlist> <src.motlist>:<n>=<new>[:<name>] ...");
+    var outMl = new ReeLib.MotlistFile(new FileHandler(a[2], false));
+    if (!outMl.Read()) return Fail("template read failed: " + a[2]);
+    outMl.Motions.Clear();
+    var cache = new Dictionary<string, ReeLib.MotlistFile>();
+    foreach (var spec in a.Skip(3)) {
+        var colon = spec.LastIndexOf(':', spec.IndexOf('=') is var eq && eq > 0 ? eq : spec.Length - 1);
+        var src = spec[..colon];
+        var rest = spec[(colon + 1)..].Split(':');
+        var nums = rest[0].Split('=');
+        ushort from = ushort.Parse(nums[0]), to = ushort.Parse(nums[1]);
+        if (!cache.TryGetValue(src, out var sml)) {
+            sml = new ReeLib.MotlistFile(new FileHandler(src, false));
+            if (!sml.Read()) return Fail("read failed: " + src);
+            cache[src] = sml;
+        }
+        var mi = sml.Motions.FirstOrDefault(m => m.motNumber == from);
+        if (mi == null) return Fail($"no motion #{from} in {src}");
+        mi.motNumber = to;
+        if (rest.Length > 1 && mi.MotFile is ReeLib.MotFile mf) { mf.Name = rest[1]; mf.Header.motName = rest[1]; }
+        outMl.Motions.Add(mi);
+        Console.WriteLine($"#{to} <- {Path.GetFileName(src)} #{from} {mi.MotFile?.Name}");
+    }
+    Console.WriteLine($"written={outMl.WriteTo(a[1])}");
+    var check = new ReeLib.MotlistFile(new FileHandler(a[1], false));
+    Console.WriteLine($"reread={check.Read()} motions={check.Motions.Count}: {string.Join(", ", check.Motions.Select(m => "#" + m.motNumber + " " + m.MotFile?.Name))}");
     return 0;
 }
 

@@ -14,6 +14,7 @@ with `dd2_methodmap` / `dd2_disasm`.
 | [game-text](game-text.md) | add or change in-game text (.msg) or ship any base-game file in a pak |
 | [id-tables](id-tables.md) | add ids past the game's own count (vocations, skills, augments, weapon kinds) |
 | [effects-and-skills](effects-and-skills.md) | play a skill effect, borrow a skill's motion or sounds, or use a summon body |
+| [animation](animation.md) | change a stance or idle, replace any motion for one character, or author motions in Blender |
 
 Spawning monsters: [../spawning.md](../spawning.md). Custom Wwise banks: [../wwise-custom-banks.md](../wwise-custom-banks.md).
 

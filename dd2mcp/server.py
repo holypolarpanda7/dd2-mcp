@@ -883,7 +883,7 @@ def _anatomy_tables():
         p.write_bytes(f[1])
         for line in ree.run("motbank-list", p).splitlines():
             parts = line.split("\t")
-            if len(parts) == 3 and parts[0].isdigit():
+            if len(parts) >= 3 and parts[0].isdigit():
                 banks.setdefault(int(parts[0]), parts[2])
     req = {}
     ref = dd2_rsz_file("natives/stm/sound/resource/hm/hm_requestreferencetablelistdata.user.3", find=".", limit=80)
@@ -1350,6 +1350,89 @@ def dd2_capture(seconds: float = 6.0, actions: str = "", lead: float = 0.5, keep
     click. Frames are deleted unless keep_frames; the sheet shows the whole desktop: delete it when done. Lessons: dd2_guide('camera')."""
     from . import capture
     return capture.capture(seconds, actions, lead, keep_frames, sheet_every)
+
+
+@mcp.tool()
+def dd2_anim(action: str, path: str = "", motion: str = "", out: str = "", extra: str = "") -> str:
+    """Animation files (no game needed; pak paths or local files). Lessons: dd2_guide('animation').
+    action:
+    - 'bank' path=<.motbank>: entries BankID / BankType / mask / motlist (an entry plays when (targetBankType & mask) == BankType,
+      most specific wins, else the bank's default entry).
+    - 'list' path=<.motlist> [motion=regex or '#n'] [extra='--bones' / '--bones --keys']: motions with number, frames, animated bones.
+    - 'clips' path=<.motlist> motion=regex: the event clips riding on a motion (sounds, effects, shells, cancel windows, draw frame).
+    - 'jmap' path=<.jmap>: joint mask groups (TreeLayer.JointMaskID) with joint names.
+    - 'export' path=<.motlist> motion=regex out=<.fbx|.glb> [extra=<.mesh pak path>, default the male body]: FBX/glTF for Blender.
+    - 'import' path=<.fbx|.glb> out=<.motlist> extra='<base motlist>:<n>': graft each animation into a copy of a game motion
+      (rotations + root/Hip translation from the file; IK/prop joints, bone list and event clips stay the game's).
+    - 'build' out=<.motlist> path=<template motlist> extra='<src>:<n>=<new>[:name] ...': compose a motlist of renumbered motions.
+    Output files land in DD2_SCRATCH/anim unless out is absolute. Inject a motlist live with a DynamicMotionBank (DnD_Classes
+    tests/anim_bank.py; game route: Human.addMotionBankOnSitChair)."""
+    import subprocess
+    from . import pak, ree
+    work = game.SCRATCH / "anim"
+    work.mkdir(parents=True, exist_ok=True)
+
+    def local(p: str) -> str:
+        if not p:
+            return p
+        lp = pathlib.Path(p)
+        if lp.exists():
+            return str(lp)
+        f = pak.find(p if p.startswith("natives/") else "natives/stm/" + p)
+        if not f:
+            hits = [h for h in pak.search_list(re.escape(p.split("/")[-1].lower()), 5)]
+            if not hits:
+                raise FileNotFoundError(p)
+            f = pak.find(hits[0])
+        dst = work / pathlib.Path(p).name
+        dst.write_bytes(f[1])
+        return str(dst)
+
+    def win(p: str) -> str:
+        return subprocess.run(["wslpath", "-w", str(pathlib.Path(p).resolve())], capture_output=True, text=True).stdout.strip()
+
+    def outp(o: str, default: str) -> str:
+        o = o or default
+        return o if pathlib.Path(o).is_absolute() else str(work / o)
+
+    try:
+        if action == "bank":
+            return ree.run("motbank-list", win(local(path)))
+        if action == "list":
+            return ree.run("mot-list", win(local(path)), *([motion] if motion else []), *extra.split())
+        if action == "clips":
+            return ree.run("mot-clips", win(local(path)), motion or ".", "--max", "20")
+        if action == "jmap":
+            txt = ree.run("jmap-info", win(local(path)), *extra.split())
+            names = {}
+            tsv = pathlib.Path(__file__).resolve().parent.parent / "docs" / "data" / "human_joints.tsv"
+            if tsv.exists():
+                for line in tsv.read_text().splitlines():
+                    f = line.split("\t")
+                    if len(f) > 2 and not line.startswith("#"):
+                        names[f[2]] = f[1]
+            return re.sub(r"\b([0-9a-f]{8})\b", lambda m: names.get(m.group(1), m.group(1)), txt)
+        if action == "export":
+            mesh = local(extra or "natives/stm/character/_kit/body/body_000_m/body_000_m.mesh.260421070")
+            o = outp(out, "export.fbx")
+            return ree.run("anim-export", win(mesh), win(local(path)), win(o), motion or ".") + f"\n-> {o}"
+        if action == "import":
+            o = outp(out, "imported.motlist.1057")
+            args = ["anim-import", win(local(path)), win(o)]
+            if extra:
+                src, _, n = extra.rpartition(":")
+                args += ["--base", win(local(src)) + ":" + n]
+            return ree.run(*args) + f"\n-> {o}"
+        if action == "build":
+            o = outp(out, "built.motlist.1057")
+            specs = []
+            for sp in extra.split():
+                src, _, rest = sp.partition(":")
+                specs.append(win(local(src)) + ":" + rest)
+            return ree.run("motlist-build", win(o), win(local(path)), *specs) + f"\n-> {o}"
+    except FileNotFoundError as e:
+        return f"not found: {e}"
+    return "action: bank | list | clips | jmap | export | import | build"
 
 
 LESSONS = pathlib.Path(__file__).resolve().parent.parent / "docs" / "lessons"
