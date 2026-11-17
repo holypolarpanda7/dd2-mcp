@@ -34,6 +34,7 @@ MCP server for Dragon's Dogma 2 modding through REFramework. Started 2026-10-26 
 | `dd2_quit` | Close the game when testing ends; optionally list saves written since a time |
 | `dd2_launch` / `dd2_screenshot` | Start the game through Steam; capture the screen |
 | `dd2_capture` | Screen burst at ~30 fps while scripted input runs: contact sheet + per-frame motion profile (camera snaps, flicker) |
+| `dd2_anim` | Animation files: motion banks (types/masks), motlists (motions, bones, clips), joint masks; FBX export, Blender import (graft onto a game motion), compose own motlists |
 | `dd2_guide` | Measured modding lessons in `docs/lessons/` (memory safety, shared data, camera, testing, text, id tables, effects) |
 | `dd2_take_control` / `dd2_hand_back` | Bring the game to the front and unpause it for testing; return the screen to the player's terminal (the game auto-pauses) |
 | `dd2_pause_state` / `dd2_key` | PauseManager state (5 = InGame pause menu); send a key press to the game |
