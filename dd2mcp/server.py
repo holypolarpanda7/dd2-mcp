@@ -17,7 +17,9 @@ mcp = MCPServer(
         "the same call made from the frame phase silently does nothing. Helpers on the Lua global D: "
         "D.methods(type, pat), D.fields(type, pat), D.player(), D.player_pos(), D.find_items(name), "
         "D.item_count(id), D.peek/D.poke32(addr, v), D.fnaddr(type, method), D.module_base(). Mod globals (e.g. Bastion's H) are reachable too. Snapshot saves (dd2_saves) "
-        "before testing anything that writes game state: autosaves overwrite the play-through."
+        "before testing anything that writes game state: autosaves overwrite the play-through. "
+        "dd2_guide() = measured lessons (memory safety, shared game data, camera, testing, text, id tables, effects): read the "
+        "matching topic before writing game objects from Lua, borrowing native skills or growing id tables."
     ),
 )
 
@@ -1335,6 +1337,35 @@ def dd2_quit(since: str | None = None) -> str:
 def dd2_screenshot() -> str:
     """Capture the primary screen to a PNG and return its path; open it with an image-capable Read."""
     return game.screenshot()
+
+
+@mcp.tool()
+def dd2_capture(seconds: float = 6.0, actions: str = "", lead: float = 0.5, keep_frames: bool = False, sheet_every: int = 3) -> str:
+    """Record what the player SEES: a screen burst at ~30 fps while `actions` drive the game, then a contact sheet and a
+    per-frame background-motion profile (a camera move is a bell over many frames; a snap/cut one SPIKE). Use it when a
+    player reports a feel ("snaps", "stutters", "flickers") your numbers don't show. Game Bar records the focused window
+    (often the terminal), so don't ask players for clips first.
+    actions: space-separated, run `lead` s after capture starts: down:<k> / up:<k> (non-blocking, 'l' 'r' or a scan code),
+    press:<k> (0.3 s), wait:<s>, pan:<dx>,<dy>. E.g. 'down:17 wait:1 down:l wait:1.2 up:l up:17' = run forward and hold left
+    click. Frames are deleted unless keep_frames; the sheet shows the whole desktop: delete it when done. Lessons: dd2_guide('camera')."""
+    from . import capture
+    return capture.capture(seconds, actions, lead, keep_frames, sheet_every)
+
+
+LESSONS = pathlib.Path(__file__).resolve().parent.parent / "docs" / "lessons"
+
+
+@mcp.tool()
+def dd2_guide(topic: str = "") -> str:
+    """Measured DD2 modding lessons (crashes, shared data, camera, testing, text, id tables, effects). No topic = the index
+    with what to read before which kind of work; topic = one file's text (e.g. 'memory-safety', 'camera'). Read the relevant
+    one BEFORE writing code that writes game objects, hands objects to the game, borrows native skills or grows id tables."""
+    if not topic:
+        return (LESSONS / "README.md").read_text(encoding="utf-8")
+    f = LESSONS / f"{topic.removesuffix('.md')}.md"
+    if not f.exists():
+        return f"no topic {topic!r}; topics: " + ", ".join(sorted(x.stem for x in LESSONS.glob("*.md") if x.stem != "README"))
+    return f.read_text(encoding="utf-8")
 
 
 @mcp.tool()
