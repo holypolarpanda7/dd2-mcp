@@ -77,7 +77,10 @@ player), so turn the frozen body to face the camera instead.
    root, Hip, props and IK, so retargeting fits every body size).
 4. `dd2_anim build` renumbers motions into your list; inject it with a dynamic bank.
 Fidelity: edits come through exactly; untouched bones drift ~0.5 deg (some fingers up to ~6 deg) through Blender's FBX resampling.
-A grafted motion keeps the base's foot-IK tracks: pick a base with a similar leg pose.
+A grafted motion keeps the base's foot-IK tracks (L/R_FootIK, L/R_ToeIK: motion tracks only, not scene joints): they PLACE THE FEET.
+Measured 2026-11-17: legs held constant in the graft, yet the feet slid up to 20 cm because the base (an idle variation)
+shifts its weight. Fix: `reetool mot-hold <in> <out> <n> "(Foot|Toe)IK$"` (every key = the first), or a base with still feet.
+Stitched clips: compose.py `"lower": "hold"` keeps hips + legs still (Spine_0 compensates).
 
 ## Idle variations (measured 2026-11-17)
 - Standing idle (bank 0 #0) is interrupted by idle variations, but the natural rotation only picks **#1-#3** (seen with

@@ -47,6 +47,7 @@ try {
         "anim-import" => AnimImport(args),
         "motlist-build" => MotlistBuild(args),
         "mot-offset" => MotOffset(args),
+        "mot-hold" => MotHold(args),
         "mot-clip-retime" => MotClipRetime(args),
         "pfb-add-weaponreg" => PfbAddWeaponReg(args),
         "user-swap" => UserSwap(args),
@@ -630,6 +631,31 @@ static int MotOffset(string[] a) {
     if (si > 0) foreach (var m in ml.Motions) if (m.MotFile is ReeLib.MotFile mf2) { mf2.Name = (mf2.Name ?? "") + a[si + 1]; mf2.Header.motName = mf2.Name; }
     ml.Motions.Sort((x, y) => x.motNumber.CompareTo(y.motNumber));
     Console.WriteLine($"offset {tracks} tracks, {keys} keys in {ml.Motions.Count} motions; written={ml.WriteTo(a[2])}");
+    return 0;
+}
+
+// Hold tracks still: every key of the matching bones' rotation and translation tracks takes the FIRST key's value (key layout kept).
+// Used for a grafted motion's foot-IK tracks: they are the base motion's and move the feet (weight shifts) although the grafted leg
+// rotations are constant. usage: mot-hold <in.motlist> <out.motlist> <motion number> <bone regex>
+static int MotHold(string[] a) {
+    if (a.Length < 5) return Fail("usage: mot-hold <in.motlist> <out.motlist> <motion number> <bone regex>");
+    var ml = new ReeLib.MotlistFile(new FileHandler(a[1], false));
+    if (!ml.Read()) return Fail("read failed: " + a[1]);
+    int num = int.Parse(a[3]); var rx = new System.Text.RegularExpressions.Regex(a[4]);
+    var held = new List<string>();
+    foreach (var m in ml.Motions) {
+        if (m.motNumber != num || m.MotFile is not ReeLib.MotFile mf) continue;
+        foreach (var c in mf.BoneClips) {
+            var n = c.ClipHeader.boneName ?? "";
+            if (!rx.IsMatch(n)) continue;
+            var rs = c.HasRotation ? c.Rotation?.rotations : null;
+            if (rs != null && rs.Length > 1) for (int i = 1; i < rs.Length; i++) rs[i] = rs[0];
+            var ts = c.HasTranslation ? c.Translation?.translations : null;
+            if (ts != null && ts.Length > 1) for (int i = 1; i < ts.Length; i++) ts[i] = ts[0];
+            held.Add($"{n}(R{rs?.Length ?? 0},T{ts?.Length ?? 0})");
+        }
+    }
+    Console.WriteLine($"held #{num}: {string.Join(" ", held)}; written={ml.WriteTo(a[2])}");
     return 0;
 }
 
