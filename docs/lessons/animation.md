@@ -78,3 +78,10 @@ player), so turn the frozen body to face the camera instead.
 4. `dd2_anim build` renumbers motions into your list; inject it with a dynamic bank.
 Fidelity: edits come through exactly; untouched bones drift ~0.5 deg (some fingers up to ~6 deg) through Blender's FBX resampling.
 A grafted motion keeps the base's foot-IK tracks: pick a base with a similar leg pose.
+
+## Idle variations (measured 2026-11-17)
+- Standing idle (bank 0 #0) is interrupted by idle variations, but the natural rotation only picks **#1-#3** (seen with
+  weapons sheathed). A new motion added to a DynamicMotionBank as #5 never played on its own over minutes; as #1 it came up
+  about 1 time in 3. To add a "fidget", replace one of #1-#3 instead of adding a new number.
+- Props that should move with a fidget (e.g. a book taken into the hand) can follow the motion from Lua: read
+  `getLayer(0):get_HighestWeightMotionNode():get_MotionName()` and `get_Frame()` every frame and key the prop by frame.
