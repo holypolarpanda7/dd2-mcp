@@ -5,6 +5,7 @@ spec: [ {"name": "<new action name>",
          "xfade": 12,                       frames of crossfade between segments (default 12)
          "root": "hold" | "keep",           hold (default): root and Hip translation of the first frame, rotation kept per segment
                                             only for "keep"; an in-place idle must not drift
+         "lower": "hold",                   optional: hips + legs keep the first frame's pose (no leg swing at the seams)
          "segments": [ {"src": "<action name substring>", "from": f0, "to": f1, "speed": 1.0}, ...] }, ...]
 Frames are GAME frames (0 = the motion's first frame). from > to plays the range backwards (a take-out reversed = a put-back).
 speed 0.5 = half speed (twice as many frames). Every frame of the result is keyed (60 fps). Quaternions slerp in the crossfade,
@@ -102,6 +103,23 @@ for e in spec:
                 if bn in fr:
                     q, v = fr[bn]
                     fr[bn] = (q0 if bn == "root" else q, v0 if v0 is not None else v)
+    # "lower": "hold" - hips and legs keep the FIRST frame's pose for the whole motion (sources stitched together each have their own
+    # stance: blending between them swings the legs, "like the ground fell out"); Spine_0 takes over the Hip's rotation change so the
+    # upper body moves as before. Pose quaternions are relative to rest: P_s' = R_s^-1 P_h0^-1 P_hi R_s P_si.
+    if e.get("lower") == "hold":
+        hip0 = frames[0]["Hip"][0]
+        sb = arm.data.bones.get("Spine_0")
+        rs = (sb.parent.matrix_local.inverted() @ sb.matrix_local).to_quaternion() if sb and sb.parent else Quaternion()
+        legs = [b for b in frames[0] if "Leg" in b and frames[0][b][0] is not None]
+        for fr in frames:
+            qh, vh = fr["Hip"]
+            if "Spine_0" in fr and fr["Spine_0"][0] is not None and qh is not None:
+                qs, vs = fr["Spine_0"]
+                fr["Spine_0"] = ((rs.inverted() @ hip0.inverted() @ qh @ rs @ qs).normalized(), vs)
+            fr["Hip"] = (hip0, vh)
+            for b in legs:
+                fr[b] = (frames[0][b][0], fr[b][1])
+        print("lower held:", ["Hip"] + legs)
     # Keyed offsets (gestures layered on top, e.g. a page turn): {"<bone>": [[frame, [["Y", deg], ["Z", deg]]], ...]} in the
     # bone's local axes, eased between keys, identity before the first and after the last key (start and end a gesture with a
     # key of [] = no offset).
