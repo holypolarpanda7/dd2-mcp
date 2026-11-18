@@ -47,6 +47,7 @@ try {
         "anim-import" => AnimImport(args),
         "motlist-build" => MotlistBuild(args),
         "mot-offset" => MotOffset(args),
+        "mot-clip-retime" => MotClipRetime(args),
         "pfb-add-weaponreg" => PfbAddWeaponReg(args),
         "user-swap" => UserSwap(args),
         "user-list" => UserList(args),
@@ -629,6 +630,60 @@ static int MotOffset(string[] a) {
     if (si > 0) foreach (var m in ml.Motions) if (m.MotFile is ReeLib.MotFile mf2) { mf2.Name = (mf2.Name ?? "") + a[si + 1]; mf2.Header.motName = mf2.Name; }
     ml.Motions.Sort((x, y) => x.motNumber.CompareTo(y.motNumber));
     Console.WriteLine($"offset {tracks} tracks, {keys} keys in {ml.Motions.Count} motions; written={ml.WriteTo(a[2])}");
+    return 0;
+}
+
+// Re-time a motion's event clips (cancel windows, hand-pose switches, sounds, look-at) to a new length or new beats: every frame
+// value in its clips (track/property spans, key frames, clip length) goes through a piecewise-linear map "src:dst,src:dst,...".
+// Frames outside the map extend the end segments. usage: mot-clip-retime <in.motlist> <out.motlist> <motion number> <map>
+// Used when a grafted motion is longer/shorter than its base (graft keeps the base's clips at the base's frames).
+static int MotClipRetime(string[] a) {
+    if (a.Length < 5) return Fail("usage: mot-clip-retime <in.motlist> <out.motlist> <motion number> <src:dst,...>");
+    var ml = new ReeLib.MotlistFile(new FileHandler(a[1], false));
+    if (!ml.Read()) return Fail("read failed: " + a[1]);
+    var pts = a[4].Split(',').Select(x => x.Split(':')).Select(x => (s: double.Parse(x[0]), d: double.Parse(x[1]))).OrderBy(x => x.s).ToArray();
+    if (pts.Length < 2) return Fail("map needs 2+ points");
+    double Map(double f) {
+        int i = 0; while (i < pts.Length - 2 && f > pts[i + 1].s) i++;
+        var (s0, d0) = pts[i]; var (s1, d1) = pts[i + 1];
+        return d0 + (f - s0) * (d1 - d0) / (s1 - s0);
+    }
+    int n = 0;
+    void Fix(object? o, params string[] names) {
+        if (o == null) return;
+        foreach (var nm in names) {
+            var t = o.GetType();
+            var f = t.GetField(nm, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+            var p = f == null ? t.GetProperty(nm, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance) : null;
+            var v = f != null ? f.GetValue(o) : p?.CanWrite == true ? p.GetValue(o) : null;
+            if (v is float fl) { var nv = (float)Math.Max(0, Math.Round(Map(fl))); if (f != null) f.SetValue(o, nv); else p!.SetValue(o, nv); n++; }
+            else if (v is double db) { var nv = Math.Max(0, Math.Round(Map(db))); if (f != null) f.SetValue(o, nv); else p!.SetValue(o, nv); n++; }
+        }
+    }
+    void Prop(ReeLib.Clip.Property p) {
+        Fix(p.Info, "startFrame", "endFrame");
+        if (p.Keys != null) foreach (var k in p.Keys) Fix(k, "frame");
+        if (p.ExtraKeys != null) foreach (var k in p.ExtraKeys) Fix(k, "frame");
+        if (p.ChildProperties != null) foreach (var c in p.ChildProperties) Prop(c);
+    }
+    var num = ushort.Parse(a[3]);
+    var m = ml.Motions.FirstOrDefault(x => x.motNumber == num);
+    if (m == null) return Fail($"no #{num}");
+    var clips = new List<ReeLib.Mot.MotClip>();
+    if (m.MotFile is ReeLib.MotFile mf) clips.AddRange(mf.Clips);
+    clips.AddRange(m.OverrideClips);
+    foreach (var c in clips) {
+        var e = c.ClipEntry; if (e == null) continue;
+        Fix(e, "FrameCount");
+        Fix(c, "frameCount", "endFrame", "startFrame");
+        var seen = new HashSet<object>(ReferenceEqualityComparer.Instance);
+        foreach (var t in e.Tracks) {                      // Tracks lists every track flat (the Root tree too): each once
+            if (!seen.Add(t)) continue;
+            Fix(t, "startFrame", "endFrame");
+            if (t.Properties != null) foreach (var p in t.Properties) Prop(p);
+        }
+    }
+    Console.WriteLine($"retimed {n} frame values in {clips.Count} clips of #{num}; written={ml.WriteTo(a[2])}");
     return 0;
 }
 
