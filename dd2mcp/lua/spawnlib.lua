@@ -62,6 +62,9 @@ local function ref_fields(obj)
     return out
 end
 
+-- RULES (DnD_Classes docs/classes-plan.md "Wild Shape test 4", each measured): a spawned clone must NEVER DIE (a killed clone made
+-- the next spawn crash; despawn with S.despawn instead; hold HitController.IsNoDie on it every frame if it can be hit), and never
+-- disable the player input group (UserInputManager.requestDisable(Player, ...) / GimmickUtil.pausePlayerInput) while spawning.
 -- spawn character id `cid` at (dx, dz) metres from the player (universal coordinates, y of the player). Returns the GenerateController
 -- or nil + reason. Rewritten 2026-11-18 (memory safety): the world's own request is CLONED, never edited; the clone's shared references
 -- are counted before any set_field; the via.Position fields are written as raw doubles (set_field of a struct overruns 16 bytes).
@@ -99,9 +102,10 @@ function S.spawn(cat, cid, dx, dz, flags)
         local v = f:get_data(uid)
         if type(v) == "userdata" and v.add_ref_permanent then v:add_ref_permanent() end
     end
-    local roff = uid:get_type_definition():get_field("_RowID"):get_offset_from_base()
-    local g = sdk.find_type_definition("System.Guid"):get_method("NewGuid"):call(nil)
-    uid:write_qword(roff, g:read_qword(0)); uid:write_qword(roff + 8, g:read_qword(8))
+    -- unique through _Index on the REAL row (a random row guid passed 2 spawns and crashed at 5 in ReserveQueue.contains: the row
+    -- is not in the generator's table). Index-mode: spawns 30 s apart + forced GC passed (2026-11-18).
+    _G.SPAWN_NEXT_INDEX = (_G.SPAWN_NEXT_INDEX or 100) + 1
+    uid:set_field("_Index", _G.SPAWN_NEXT_INDEX)
     rid:set_field("_UniqID", uid)
     c:set_field("_ReqID", rid)
     c:set_field("_Option", flags or 0)
