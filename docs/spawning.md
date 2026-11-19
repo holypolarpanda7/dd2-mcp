@@ -14,6 +14,20 @@ Reconnect the MCP (`/mcp`) after updating dd2-mcp so the tool appears. The game 
 * Find instances: `GenerateManager._InstanceInfoManager:getInstanceInfoList(category, CharacterID)` -> `InstanceInfo` (Instance = GameObject, Chara, Container, Deleted).
 * Despawn = `GenerateManager.execDestroyInstance(category, InstanceInfo, true, true, true)` (verified: the instance goes away and, with flags 7, stays away).
 
+## KNOWN HAZARDS in spawnlib (found 2026-11-18, not yet fixed in the code)
+`S.spawn` edits the WORLD's own saved request in place and writes it with `set_field`:
+* `_Pos` / `_InitPos` are `via.Position` (3 doubles, 24 bytes, at 0x30 / 0x50 of `GenerateRequestCharacterSaveData`):
+  `set_field` with a struct overruns by 16 bytes (memory-safety lesson). Write them with `write_double(offset, v)`.
+* `_ReqID` (0x48) is an OBJECT reference (`app.RequestID`): `set_field` releases the old one. On the world's own request that
+  is a real (if unwanted) change; on a `MemberwiseClone` copy the old reference was never counted, so the release takes the
+  SOURCE request's count and the game later uses a freed object. Two crashes on 2026-11-18 followed this pattern
+  (`GenerateManager.isDisableGenerateRequest` read of -1; `InstanceInfoController.autoDestroyCharaInstance` garbage instance).
+  Unproven cause; next test: add_ref every shared reference field of the clone before any set_field, with a forced-GC loop.
+* `_CharaIDHash` must keep its matching `_InitSetTypeHash`: swapping only the id crashed in `isDisableGenerateRequest`.
+* A request whose `_LoadArea` differs from the player's area (the camp-050 world's wolf request: 2 vs 1) is rejected
+  (`requestGenerate` returns nil); setting `_LoadArea` alone did not help.
+Details: DnD_Classes `docs/classes-plan.md` "Wild Shape test 2".
+
 ## Rules learned the hard way
 * NEVER call `requestDestroy(container, ...)` twice on one container: containers are pooled; the second call crashed the game.
 * Do not despawn and immediately respawn: one session crashed in `GenerateReserveDistributor.ReserveQueue.update` -> `InstanceInfoController.existsInstance` with a stale UniqueID.
