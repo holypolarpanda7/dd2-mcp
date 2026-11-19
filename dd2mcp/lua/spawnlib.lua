@@ -84,8 +84,25 @@ function S.spawn(cat, cid, dx, dz, flags)
     for _, off in ipairs({ OFF_POS, OFF_INITPOS }) do
         c:write_double(off, u.ux + dx); c:write_double(off + 8, u.uy); c:write_double(off + 16, u.uz + dz)
     end
-    local rid = gm:call("getPoolRequestID")
-    rid:add_ref_permanent()
+    -- a UNIQUE request id: getPoolRequestID() returns a BLANK one (zero generator + zero row guid), so every spawn shared id 0
+    -- and only the first was accepted (requestGenerate rejects an id that has an instance or a context record). Clone the
+    -- source's id (its generator stays valid), clone its UniqueID and give it a fresh row guid (raw 16-byte write: Guid = struct).
+    local rid = tpl:get_field("_ReqID"):call("MemberwiseClone")
+    rid:add_ref_permanent(); SPAWN_KEEP[#SPAWN_KEEP + 1] = rid
+    for _, f in ipairs(ref_fields(rid)) do
+        local v = f:get_data(rid)
+        if type(v) == "userdata" and v.add_ref_permanent then v:add_ref_permanent() end
+    end
+    local uid = rid:get_field("_UniqID"):call("MemberwiseClone")
+    uid:add_ref_permanent(); SPAWN_KEEP[#SPAWN_KEEP + 1] = uid
+    for _, f in ipairs(ref_fields(uid)) do
+        local v = f:get_data(uid)
+        if type(v) == "userdata" and v.add_ref_permanent then v:add_ref_permanent() end
+    end
+    local roff = uid:get_type_definition():get_field("_RowID"):get_offset_from_base()
+    local g = sdk.find_type_definition("System.Guid"):get_method("NewGuid"):call(nil)
+    uid:write_qword(roff, g:read_qword(0)); uid:write_qword(roff + 8, g:read_qword(8))
+    rid:set_field("_UniqID", uid)
     c:set_field("_ReqID", rid)
     c:set_field("_Option", flags or 0)
     local cont = gm:call("convRequestSaveDataToContainer(app.GenerateManager.GenerateRequestCharacterSaveData)", c)

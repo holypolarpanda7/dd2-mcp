@@ -14,6 +14,16 @@ Reconnect the MCP (`/mcp`) after updating dd2-mcp so the tool appears. The game 
 * Find instances: `GenerateManager._InstanceInfoManager:getInstanceInfoList(category, CharacterID)` -> `InstanceInfo` (Instance = GameObject, Chara, Container, Deleted).
 * Despawn = `GenerateManager.execDestroyInstance(category, InstanceInfo, true, true, true)` (verified: the instance goes away and, with flags 7, stays away).
 
+## requestGenerate's rejection checks (disassembly, 2026-11-18): any one -> returns nil
+Unique id already registered; `containsGeneratorID`; `GenerateDisableFlagChecker.isFlag`; `checkQuestFlag`; hard-mode / dark-moon
+rules; `GenerateCatalogController.getPrefabController(category, id)` (the character's prefab must be in the generate catalog: the
+"native to this area" check); `InstanceInfoManager.existsInstance(category, UniqueID)`; `checkRepopGenerate`;
+`ContextDBMS.referContexts(UniqueID)` (a saved record for that id rejects). **`getPoolRequestID()` returns a BLANK id** (zero
+generator + zero row guid): every old spawn shared unique id 0, so only the first was accepted. S.spawn now clones the source's id
+and gives its UniqueID a fresh row guid (ids verified in game; repeated spawns with it NOT yet verified).
+**Open:** spawned instances whose container goes bad crash in `InstanceInfoController.autoDestroyCharaInstance`
+(`Character.GenerateInfo._Container._CommonInfo` garbage): seen after 3 back-to-back clones and after rejected requests.
+
 ## Rules measured 2026-11-18 (11 game runs; spawnlib S.spawn rewritten to follow them)
 * **Monster cap: `GenerateManager.getGenerateLimit(3)` = 30 loaded monster instances** (`_InstanceInfoManager:getInstanceInfoList(3)`).
   The camp-050 lab sits at exactly 30: that is why "dd2_spawn crashes the lab". Check `S.room()` first.
