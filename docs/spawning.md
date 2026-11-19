@@ -14,7 +14,23 @@ Reconnect the MCP (`/mcp`) after updating dd2-mcp so the tool appears. The game 
 * Find instances: `GenerateManager._InstanceInfoManager:getInstanceInfoList(category, CharacterID)` -> `InstanceInfo` (Instance = GameObject, Chara, Container, Deleted).
 * Despawn = `GenerateManager.execDestroyInstance(category, InstanceInfo, true, true, true)` (verified: the instance goes away and, with flags 7, stays away).
 
-## KNOWN HAZARDS in spawnlib (found 2026-11-18, not yet fixed in the code)
+## Rules measured 2026-11-18 (11 game runs; spawnlib S.spawn rewritten to follow them)
+* **Monster cap: `GenerateManager.getGenerateLimit(3)` = 30 loaded monster instances** (`_InstanceInfoManager:getInstanceInfoList(3)`).
+  The camp-050 lab sits at exactly 30: that is why "dd2_spawn crashes the lab". Check `S.room()` first.
+* A request sent at the cap (or for a character the area cannot generate) is REJECTED (`requestGenerate` -> nil) and the leftover
+  crashed the game 1-60 s later in `InstanceInfoController.autoDestroyCharaInstance` (an instance whose
+  `Character.GenerateInfo._Container._CommonInfo` is gone: the pooled container was recycled).
+* Making room by despawning (`execDestroyInstance`) right before a spawn crashed in `GenerateReserveDistributor.ReserveQueue.update`.
+* Works (forced GC every frame for 90 s, game alive): a cloned critter request in the lab (critters do not count to the cap); a cloned
+  Saurian request at Gimmick_Camp_049 (21/30 monsters).
+* Only characters NATIVE to the current area (the world has requests for them) generate. Not native = wolf at camp 049: from-scratch
+  `getPoolGenerateInfoContainerForCharacter` -> rejected -> crash; Saurian clone turned into a wolf (id + the wolf's own
+  `_InitSetTypeHash` 304624144) -> accepted, crashed during generation. Other routes for non-native characters (untested):
+  the NPC wolf system (`NPCManager.registerWolfData`, `DummyDataManager.addDummyDataWolf`), domain-query tables
+  (`GenerateManager._DomainQueryGenerateManager`, registry `DomainQueryGenerateTable._Elements`: 47 ids, Ch223001_Reinforce NOT
+  registered; calling `requestDomainQueryGenerate` with nil callbacks threw).
+
+## KNOWN HAZARDS in the OLD spawnlib (found 2026-11-18, FIXED in S.spawn the same day)
 `S.spawn` edits the WORLD's own saved request in place and writes it with `set_field`:
 * `_Pos` / `_InitPos` are `via.Position` (3 doubles, 24 bytes, at 0x30 / 0x50 of `GenerateRequestCharacterSaveData`):
   `set_field` with a struct overruns by 16 bytes (memory-safety lesson). Write them with `write_double(offset, v)`.
