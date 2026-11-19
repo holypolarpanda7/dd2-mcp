@@ -388,7 +388,19 @@ def dd2_bhvt(path: str, node: str = "", action: str = "", tree: bool = False, de
     file. node: regex on full node paths (e.g. 'PsychoShoot$') -> each match with its selector, actions (decoded RSZ
     objects, cut at `width` chars), children with conditions, FSM states/start transitions with conditions and events. action: regex on
     action type names -> nodes running them. tree=True: the matching node's subtree as an indented outline, `depth`
-    levels. No node/action: summary (node count, top-level states, condition/state counts)."""
+    levels. No node/action: summary (node count, top-level states, condition/state counts).
+    A section whose RSZ layouts no longer decode is skipped (its actions show as '-') and named at the end with the
+    error: fix it with dd2_rszgen on the failing type (game running)."""
+    trees = []
+    out = _bhvt_core(path, node, action, tree, depth, detail, limit, width, trees)
+    errs = getattr(trees[0], "block_errors", None) if trees else None
+    if errs:
+        out += "\n\nNOT DECODED (layouts out of date; dd2_rszgen the type with the game running):\n" + "\n".join(
+            f"  {sec}: {err}" for sec, err in errs.items())
+    return out
+
+
+def _bhvt_core(path, node, action, tree, depth, detail, limit, width, trees) -> str:
     import re as _re
     from . import bhvt, pak
     if pathlib.Path(path).exists():
@@ -402,6 +414,7 @@ def dd2_bhvt(path: str, node: str = "", action: str = "", tree: bool = False, de
         T = bhvt.Tree(data)
     except ValueError as e:
         return f"{path}: {e}"
+    trees.append(T)
     if action:
         rx = _re.compile(action, _re.I)
         out = []

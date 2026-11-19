@@ -140,10 +140,21 @@ class Tree:
 
     # -- RSZ blocks -----------------------------------------------------------------------------------------------
     def block(self, section):
+        """A section's RSZ block, or None. A block whose layouts don't decode (types changed since the layout sources)
+        is None too, its error kept in self.block_errors, so node names and structure stay readable (2026-11-18:
+        ch223/ch221 monster FSMs failed on app.MonsterJump and took the whole node view down)."""
         if section not in self._blocks:
             start = self.off[section]
             nxt = min((o for o in self.off.values() if o > start), default=len(self.d))
-            self._blocks[section] = rszfile.Block(self.d, start, nxt) if self.d[start:start + 4] == b"RSZ\x00" else None
+            blk = None
+            if self.d[start:start + 4] == b"RSZ\x00":
+                try:
+                    blk = rszfile.Block(self.d, start, nxt)
+                except ValueError as e:
+                    if not hasattr(self, "block_errors"):
+                        self.block_errors = {}
+                    self.block_errors[section] = str(e)
+            self._blocks[section] = blk
         return self._blocks[section]
 
     def obj(self, section, static_section, ref):
