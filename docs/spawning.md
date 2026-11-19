@@ -14,6 +14,14 @@ Reconnect the MCP (`/mcp`) after updating dd2-mcp so the tool appears. The game 
 * Find instances: `GenerateManager._InstanceInfoManager:getInstanceInfoList(category, CharacterID)` -> `InstanceInfo` (Instance = GameObject, Chara, Container, Deleted).
 * Despawn = `GenerateManager.execDestroyInstance(category, InstanceInfo, true, true, true)` (verified: the instance goes away and, with flags 7, stays away).
 
+## The four rules for spawning on demand (2026-11-19, about 25 game runs, DnD_Classes "Wild Shape test 4")
+1. Room under the generate limit (monsters 30), at a place that generates monsters (towns never do).
+2. A unique id per spawn: clone the source's request id and give its UniqueID a new `_Index` (keep the real row).
+3. A spawned clone must NEVER DIE: a killed clone made the next spawn crash, a despawned one did not. Hold `IsNoDie` on it and
+   remove it with `execDestroyInstance`.
+4. Never disable the player input group while spawning (`UserInputManager.requestDisable(Player, *)`, which
+   `GimmickUtil.pausePlayerInput` is): the next spawn crashed every time. Freeze a character with `set_UpdateSelf(false)` instead.
+
 ## requestGenerate's rejection checks (disassembly, 2026-11-18): any one -> returns nil
 Unique id already registered; `containsGeneratorID`; `GenerateDisableFlagChecker.isFlag`; `checkQuestFlag`; hard-mode / dark-moon
 rules; `GenerateCatalogController.getPrefabController(category, id)` (the character's prefab must be in the generate catalog: the
