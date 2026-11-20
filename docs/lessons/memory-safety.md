@@ -13,6 +13,12 @@ same overrun, so the write plants the SOURCE object's next 16 bytes over your ob
   (`read_qword`/`write_qword` at `get_address() + field offset`).
 - `get_element` on an enum ARRAY returns a boxed object. Writing it into another array stores pointer bits.
 
+## Struct returns and struct array elements
+Reading fields off a value type that a method RETURNED (`EquipData:call("getCurrentArisenWeapon")` -> `ArisenWeaponData`,
+then `:get_field("Main")`), after walking the same struct array with `get_elements()`, ended in "Heap allocation failed"
+within seconds (2026-11-20). Treat struct returns and struct array elements like the set_field overrun: read raw
+(`read_qword` at the field offset of the array's data) or use a method that returns a plain value or an object.
+
 ## set_field on a reference field releases the old value
 It counts the new reference and releases the old one. If the old value got there by a raw copy (the overrun above, or your own
 byte copy), the game never took a reference, and the release takes one from someone else. In one real case a shared engine string
