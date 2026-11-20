@@ -332,6 +332,46 @@ def dd2_rsz(pattern: str = "", fields: bool = False, limit: int = 200, action: s
     return rsz.search(pattern, fields, limit) if pattern else "search needs pattern"
 
 
+PAD_BITS = {1: "DUp", 2: "DDown", 4: "DLeft", 8: "DRight", 16: "Y", 32: "A", 64: "X", 128: "B", 256: "LB", 512: "LT",
+            1024: "RB", 2048: "RT", 4096: "L3", 8192: "R3", 16384: "Back", 32768: "Start"}
+
+
+@mcp.tool()
+def dd2_pad(find: str = "") -> str:
+    """The game's default controller table, offline: every app.CharacterPadAssign.Info row (Action id, pad buttons as Xbox
+    names from via.hid.GamePadButton, PreInput = the held shift action, 14 = LB skill mode, 15 = item mode) with the action's
+    English name from the key-bind settings. find: regex on the row text. See docs/lessons/input.md for how rows become
+    ButtonOnFlags bits and which shifts suppress other rows."""
+    import re as _re
+    from . import pak, rszfile, msg
+
+    def block(path):
+        data = pak.find(path)[1]
+        offs = rszfile.blocks(data)
+        return rszfile.Block(data, offs[0], offs[1] if len(offs) > 1 else None)
+
+    text = {r[2].lower(): r[3] for r in msg.index()}
+    names = {}
+    for inst in block("natives/stm/appsystem/device/userdata/keybindsettinguserdata.user.3").instances:
+        if inst and inst[0] == "app.KeyBindSettingItem" and not inst[1]["_IsSystemInput"]:
+            f = inst[1]
+            names.setdefault(f["_CharacterCommand"], text.get(f["_FunctionMsgId"].lower(), "?")[:40])
+
+    def pad(bits):
+        return "+".join(n for b, n in PAD_BITS.items() if bits & b) or "-"
+
+    rx = _re.compile(find, _re.I) if find else None
+    out = []
+    for inst in block("natives/stm/appsystem/ch/common/userdata/input/characterpadassign1.user.3").instances:
+        if inst and inst[0] == "app.CharacterPadAssign.Info":
+            f = inst[1]
+            pre = f"hold {f['PreInput']:2} + " if f["PreInput"] else ""
+            line = f"action {f['Action']:2} {names.get(f['Action'], '?'):34} {pre}{pad(f['Button'])}"
+            if not rx or rx.search(line):
+                out.append(line)
+    return "\n".join(out) or "no match"
+
+
 @mcp.tool()
 def dd2_rsz_file(path: str, find: str = "", show: str = "", depth: int = 2, limit: int = 40) -> str:
     """Decode the RSZ blocks (serialized objects) of a game file: a pak path ('natives/stm/...motfsm2.45', newest
