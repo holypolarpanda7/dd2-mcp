@@ -28,3 +28,16 @@ Spells and stats scale with a weapon only through the game's weapon-kind table (
 
 ## Ids and saves
 Ids you ship are fixed forever: saves store them. Give your mod a block (e.g. 16 per custom vocation) and keep the rest free.
+
+## More than one custom vocation (measured 2026-11-21, jobs 11 + 12)
+- Jobs must be consecutive from 11; the job count global covers the highest. Clone every per-job row from a HOST vocation
+  (stats, lock-on, stamina, guild JobInformationParam, per-character EquipedSkills): the new vocation then works on the host's
+  machinery with no further code (job 12 from the Archer: guild row, change vocation, skills from the slots).
+- The HELD weapon's vocation picks basic attacks and skill nodes by itself (`Character.getWeaponJob`): give your vocation's bit
+  to bows/daggers/swords and it fights with the Archer/Thief/Fighter sets. A skill of another vocation's weapon simply does
+  nothing while the wrong weapon is held.
+- Equip masks: `ItemWeaponParam._Job` is a UInt16 bit mask (1 << job), so only jobs 12-15 fit; `_EquipCategory` 1 = shields.
+- Warfarer features are closed by INLINE `CurrentJob == 10` compares in compiled code (weapon-list menus,
+  `Job10WeaponManager.isJob10`): hooking one method does not hand them to another job.
+- A save made as a custom vocation, loaded WITHOUT the mod: it loaded (job 12 test); some per-job values read wrong
+  ("Overencumbered"); the guild's Change Vocation still works, so players can recover. Tell them to change first anyway.
