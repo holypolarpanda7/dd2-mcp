@@ -901,19 +901,36 @@ def dd2_refcount(expr: str, call: str = "", wait: float = 1.5) -> str:
     'sdk.create_instance("app.ShellRequest.ShellCreateInfo"):add_ref()'); call: Lua run with that object as `o` (update phase);
     the count (header +8) is read before, right after the call and again after `wait` seconds, with the object's validity.
     A drop to 0 = the call consumed the caller's reference (requestCreateShell does: fresh object per call, add_ref_permanent,
-    never reuse). 0xFFFFFFFF = a fresh object nobody owns yet. Crash RCA 2026-11-12."""
-    first = game.eval_lua("local o = (" + expr + ")\nif not o then return 'expr gave nil' end\n"
-                          "local a = o:get_address(); local function rc() return sdk.to_valuetype(a + 8, 'System.UInt32'):read_dword(0) end\n"
-                          "local r0 = rc()\n" + call + "\nlocal r1 = rc()\n_G.__dd2rc = { a = a }\n"
-                          "return string.format('%s @%x: before %d, after the call %d', o:get_type_definition():get_full_name(), a, r0, r1)",
+    never reuse). 0xFFFFFFFF = a fresh object nobody owns yet. Crash RCA 2026-11-12.
+    BASELINE (2026-11-21): the readings include this tool's own Lua handle (+1, released about a second later), so an existing
+    object is first measured with no handle alive; the report ends with the NET change the call left (a set_field of a reference
+    field: +1 = the field holds its own reference). Fresh objects (expr makes a new one each time) get no baseline."""
+    rc = "local function rc(a) return sdk.to_valuetype(a + 8, 'System.UInt32'):read_dword(0) end\n"
+    pre = game.eval_lua("local o = (" + expr + ")\nif not o then return 'nil' end\n_G.__dd2rc0 = o:get_address() return 'ok'", phase="update")
+    base = None
+    if pre.get("ok") and (pre.get("ret") or [""])[0] == "ok":
+        time.sleep(max(1.2, wait))
+        b = game.eval_lua(rc + "return rc(_G.__dd2rc0)", phase="update")
+        if b.get("ok"):
+            base = int((b.get("ret") or [0])[0])
+    first = game.eval_lua("local o = (" + expr + ")\nif not o then return 'expr gave nil' end\n" + rc +
+                          "local a = o:get_address()\nlocal r0 = rc(a)\n" + call + "\nlocal r1 = rc(a)\n_G.__dd2rc = { a = a }\n"
+                          "return string.format('%s @%x: before %d, after the call %d', o:get_type_definition():get_full_name(), a, r0, r1), a == _G.__dd2rc0",
                           phase="update")
     if not first.get("ok"):
         return game.format_result(first)
-    time.sleep(max(0.0, wait))
-    later = game.eval_lua("local a = _G.__dd2rc.a; local r = sdk.to_valuetype(a + 8, 'System.UInt32'):read_dword(0)\n"
+    time.sleep(max(1.2, wait))
+    later = game.eval_lua(rc + "local a = _G.__dd2rc.a; local r = rc(a)\n"
                           "local ok = pcall(function() return sdk.to_managed_object(a):get_type_definition():get_full_name() end)\n"
-                          "return string.format('after %.1f s: %d, valid %s', " + str(float(wait)) + ", r, tostring(ok))", phase="update")
-    return "\n".join(str(v) for v in (first.get("ret") or []) + (later.get("ret") or [later.get("err")]))
+                          "return string.format('after %.1f s: %d, valid %s', " + str(float(max(1.2, wait))) + ", r, tostring(ok)), r", phase="update")
+    ret1, ret2 = first.get("ret") or [], later.get("ret") or [later.get("err")]
+    lines = [str(ret1[0]) if ret1 else "?", str(ret2[0])]
+    same = len(ret1) > 1 and ret1[1] in (True, "true")
+    if base is not None and same and len(ret2) > 1:
+        lines.append(f"baseline (no Lua handle) {base} -> settled {int(ret2[1])}: NET {int(ret2[1]) - base:+d} reference(s) left by the call")
+    else:
+        lines.append("no baseline (fresh object each evaluation, or the first read failed)")
+    return "\n".join(lines)
 
 
 _ANATOMY = {}
