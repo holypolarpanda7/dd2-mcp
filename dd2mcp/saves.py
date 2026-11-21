@@ -18,17 +18,29 @@ def _files(d: pathlib.Path) -> list[pathlib.Path]:
     return sorted(p for p in d.iterdir() if p.is_file() and p.suffix == ".bin")
 
 
+LIST_MAX = 25   # a long listing filled the context with hundreds of empty undeploy folders (2026-11-21)
+
+
 def listing() -> str:
     src = game.saves_dir()
     lines = [f"live: {src}"]
     if src:
         for f in _files(src):
             lines.append(f"  {f.name:18} {f.stat().st_size:>9}  {time.strftime('%Y-%m-%d %H:%M', time.localtime(f.stat().st_mtime))}")
-    lines.append(f"snapshots in {BACKUPS}:")
+    lines.append(f"snapshots in {BACKUPS} (newest first; folders without save files, e.g. undeploy dumps, are skipped):")
     if BACKUPS.exists():
-        for d in sorted(BACKUPS.iterdir(), reverse=True):
-            if d.is_dir():
-                lines.append(f"  {d.name}  ({len(_files(d))} files)")
+        shown = skipped = 0
+        for d in sorted((d for d in BACKUPS.iterdir() if d.is_dir()), key=lambda d: d.stat().st_mtime, reverse=True):
+            n = len(_files(d))
+            if n == 0:
+                skipped += 1
+                continue
+            if shown < LIST_MAX:
+                lines.append(f"  {d.name}  ({n} files)")
+            shown += 1
+        if shown > LIST_MAX:
+            lines.append(f"  ... {shown - LIST_MAX} older snapshots not shown")
+        lines.append(f"  ({skipped} folders without save files skipped)")
     return "\n".join(lines)
 
 
