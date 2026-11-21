@@ -54,3 +54,10 @@ treats references as references.
 A crash that takes minutes of play can be forced in seconds: run
 `re.on_application_entry("UpdateBehavior", function() collectgarbage("collect") end)` during a real input loop. Always do a
 control run with the feature off. See testing.md "Crash hunts" for the numbers you need.
+
+## Reference fields and clones DO take references (measured 2026-11-21, dd2_refcount with baseline)
+- `obj:set_field("RefField", managed_obj)` on a reference-type field: NET +1 (the field owns a reference). Copying a native row's
+  object (a via.Prefab `_Movie`) into your own rows is NOT a shared-reference bug.
+- `MemberwiseClone()` of a row: its reference fields gain a reference each (net +1 per clone).
+- Reading refcounts: your own Lua handle counts +1 until it is collected (~1 s). Measure against a no-handle baseline (dd2_refcount
+  does it since 2026-11-21) or a first reading will look like "the call added a reference" when it did not, or the reverse.
