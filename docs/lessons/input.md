@@ -33,3 +33,10 @@ log `ButtonOnFlags` per frame. `UserInput.processButton(UInt64, GamePadButton)` 
 so injecting there does nothing.
 
 Sheathe/Draw and Cancel fire on press: the draw node starts about 6 update frames after the press.
+
+## Press edges (measured 2026-11-21)
+`UserInput.ButtonTriggerFlags` holds the press EDGES (worked out in `UserInput.update(Boolean, Boolean)` from `OldButtonOnFlags`). Actions
+start on the edge, so a button still held after you changed something (e.g. swapped the weapon in the hand) does nothing until it
+is pressed again. To replay a press: post-hook `UserInput.update` for the player's input only and OR the bit into
+`ButtonTriggerFlags` and `ButtonOnFlags` for one or two frames, and only once the character can act (weapon drawn, back in
+locomotion): a press on a sheathed weapon only draws it, and one during an ending attack is swallowed.
