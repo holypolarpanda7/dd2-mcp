@@ -45,3 +45,8 @@ show. Delete the frames afterwards: they show the whole desktop.
   (Windows dumps: `%LOCALAPPDATA%\CrashDumps\DD2.exe.<pid>.dmp`).
 - Mirror your mod's log lines into the REFramework log with a heartbeat, so a crash shows the last thing your mod did, to the ms.
 - `dd2_launch(wait=N)` reports CRASHED when the crash dialog appears (it checks every DD2 window).
+
+## Killing a test target (2026-11-21)
+`HitController.setHpValue(0, false)` and `setHp(0, true, 0)` do not kill (IsDie stays false). A FROZEN character
+(`set_UpdateSelf(false)`) keeps its HP whatever you set. For a death test: unfreeze it, `setHpValue(5, false)`, then land one real
+hit. Unfrozen goblins wander off and climb rocks between steps: stage again right before shooting, or use an ogre (ch250).
