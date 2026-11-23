@@ -42,3 +42,11 @@ alone still shows a ghost figure. One decoy per character.
 - Live shells: `ShellManager.getShellList()`; per shell `get_Owner()`, `get_ShellParamId()`, `get_RequestId()`; end one with
   `requestDestroyShell(requestId)`.
 - Shell params are shared: see shared-data.md.
+
+## Glowing eyes on any human: the game's dragonsplague eye glow (2026-11-23)
+`PawnManagerBehavior.PawnEyeGlowData._EyeGlowParamList` names it: the child GameObject `head`, materials `l_eye_mat` / `r_eye_mat`
+(murmur3 UTF-16 hashes 22864041 / 352092899), variable `Emissive_Intensity` (177287546; also `app.EyeGlowController.EmmisiveIntensityHash`).
+Default colour `Emissive_Color1/2` = red, intensity 0. Set colour + intensity on the head's `via.render.Mesh` (`setMaterialFloat4` /
+`setMaterialFloat`, indices by name) and any colour glows; write it every frame while wanted and put the read values back after.
+It shows through a mask's eye-holes. Judge it somewhere dim too: in bright daylight it read as pale "lenses" (we first thought it did
+nothing). `app.EyeGlowController.tryInitialize` alone returns false (it needs EyeGlowData via `init`).
