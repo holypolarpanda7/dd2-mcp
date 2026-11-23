@@ -88,3 +88,13 @@ Stitched clips: compose.py `"lower": "hold"` keeps hips + legs still (Spine_0 co
   about 1 time in 3. To add a "fidget", replace one of #1-#3 instead of adding a new number.
 - Props that should move with a fidget (e.g. a book taken into the hand) can follow the motion from Lua: read
   `getLayer(0):get_HighestWeightMotionNode():get_MotionName()` and `get_Frame()` every frame and key the prop by frame.
+
+## A quick cast gesture with no wind-up: another vocation's upper-body node
+`HumanActionSelector.Selectors[i]:requestActionImpl(node, 1)` runs any vocation's UPPER-BODY node (layer 1) on any character, with
+any weapon held: the legs keep their locomotion (running stays running). Selector indices: 12 Job09 ... 14 Job07 ... 20 Job01, 21
+NoJob. Mystic Spearhand `Job07_Blade` (bank 170 #1800, 95 frames) = a one-handed forward sweep, cancelable from frame 53, a good
+"cast a spell" gesture for a bow or sword user (DnD_Classes 2026-11-23). Full-body skill nodes are no use for this: each carries its
+skill's gameplay action. Watch the node's other actions: `HumanExSkillEffect` (SkillID 75 here) lights the HELD weapon with the
+skill's effect (a blade along a bow); a pre-hook on `HumanExSkillEffect.start` returning SKIP_ORIGINAL removes it and the node still
+plays (its `requestEffect` is not on that path). Swap the motion per character with a DynamicMotionBank on the same BankID/number.
+Testing: a screenshot takes ~1 s, so read animation state BEFORE taking one (state read after it is late).
