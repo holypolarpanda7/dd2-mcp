@@ -22,6 +22,12 @@ whole game run. They live in memory only, so a restart restores them and saves a
    says it is yours, or set your own instance's field to point at the clone.
 4. The native behaviour stays untouched for the player's other vocations, pawns and enemies.
 
+## Substitute where the game READS it (measured 2026-11-22)
+Swap the clone in at the point the value is consumed, and measure the outcome, not the swap counter. A private scaled
+`app.AttackUserData` swapped into `Shell.HitCtrl_CheckAttackCollisionHitHandler`'s argument changed nothing: the damage step reads
+`HitController.DamageInfo.<AttackUserData>k__BackingField` (a per-hit object, safe to point at your clone). Set it in the
+`Shell.callbackShellHit` pre-hook (args[3] = the DamageInfo). The broken version ran for six days because a counter said "swapped".
+
 ## Borrowing a native skill's pieces
 A borrowed native skill (its wind-up motion, its node, its effects) brings everything the game wired to it: camera switches,
 sounds, lock-on UI, enchant effects, flags. Map them all first (`dd2_skill_anatomy`, `dd2_effect_trace`, `dd2_sound_trace`,
