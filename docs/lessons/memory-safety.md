@@ -25,6 +25,16 @@ byte copy), the game never took a reference, and the release takes one from some
 ("_root") lost one count per cast and wrapped to 4294967295 within 10 casts. Copy objects field by field only with code that
 treats references as references.
 
+## Never overwrite the DEFAULT of an object you just created (load crash solved 2026-11-23)
+`local d = sdk.create_instance("app.XInformationData"):add_ref_permanent(); d:set_field("_Params", arr)` crashes the game about 1 time in
+100, 1 ms to 1 s later, on any thread. The constructor put a default object (an empty array) in the field; `set_field` releases it; letting the last
+reference of an object made in the SAME FRAME go from Lua corrupts the engine's per-thread table of local objects (negative
+reference counts = local). Reproduced with no mod at the title screen. Measured on `via.UserData` classes; a plain class
+survived 7500 tries; creating and releasing an array at once also failed. Two safe ways, 7500 clean each:
+- keep the default: `local old = d:get_field(n); if old then old:add_ref_permanent() end; d:set_field(n, v)`;
+- set the fields while the object is still local, THEN `add_ref_permanent()`.
+Signatures: null free-list pop (write of 8), release of a zeroed object, execute of a heap address, UTF-16 text read as a pointer.
+
 ## Objects you hand to the game
 - **Never pass a freshly created object to a call the game may keep** (warps, queued requests, pending options). Lua frees it
   at its next collection and the game crashes later. Create ONE, `add_ref()`, keep it in a global, and reuse it (for example
@@ -61,3 +71,13 @@ control run with the feature off. See testing.md "Crash hunts" for the numbers y
 - `MemberwiseClone()` of a row: its reference fields gain a reference each (net +1 per clone).
 - Reading refcounts: your own Lua handle counts +1 until it is collected (~1 s). Measure against a no-handle baseline (dd2_refcount
   does it since 2026-11-21) or a first reading will look like "the call added a reference" when it did not, or the reverse.
+
+## Rare crashes: sample sizes and controls (2026-11-23)
+A crash that happens in a few % of tries makes ANY change look like the cause or the fix over 15-40 tries. Six confident theories died this way
+in one day. What worked: shrink to a repro that dies (nearly) every time, log every step to the REFramework log (it survives), run one small operation
+thousands of times per mode, use a fresh game per mode, and pair each surviving fix with a control that dies. Then remove things the crash
+does not need (hooks off, mod off, save off) before explaining it. Reading the engine's own routine at the fault address
+(dd2_disasm) and REFramework's source at the installed revision settled what the dumps meant.
+- Lua threads can be measured: `thread.get_id()` per callback/hook, a `setmetatable({}, {__gc=...})` sentinel for finalizers. DD2: `on_frame`, UpdateBehavior
+  and finalizers share the main thread; `sdk.hook` bodies run on many worker threads. REFramework stops Lua's own collector and collects at EndRendering.
+- Reading a count through a Lua handle changes it: read the header through `sdk.to_valuetype(address, "System.Int32")` instead.
