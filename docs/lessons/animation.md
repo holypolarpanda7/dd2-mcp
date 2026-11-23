@@ -98,3 +98,11 @@ skill's gameplay action. Watch the node's other actions: `HumanExSkillEffect` (S
 skill's effect (a blade along a bow); a pre-hook on `HumanExSkillEffect.start` returning SKIP_ORIGINAL removes it and the node still
 plays (its `requestEffect` is not on that path). Swap the motion per character with a DynamicMotionBank on the same BankID/number.
 Testing: a screenshot takes ~1 s, so read animation state BEFORE taking one (state read after it is late).
+
+## Mirroring a motion left <-> right (`blender/mirror.py`)
+Headless, no pose operators: per frame read every pose bone's armature-space matrix M, set bone b to `S @ M_twin(b) @ C_b` with S the
+reflection across the side axis (X for DD2 humans as imported) and `C_b = (S @ Rest_twin)^-1 @ Rest_b`, then rebuild local keys parent
+first (`basis = rest_rel^-1 @ M'_parent^-1 @ M'_b`). Twins: the side marker is a prefix (`L_Arm_Upper`) OR follows an underscore
+(`SHAPEKEY_L_Pec_A`): missing the infix ones mirrors them onto themselves and tears the preview mesh. Graft the result onto the game
+motion (`dd2_anim import` base map) so its clips stay; check with `render_poses.py` sheets side by side (DnD_Classes 2026-11-23: the
+Spearhand's left-hand cast gesture as a right-hand one for bow users).
