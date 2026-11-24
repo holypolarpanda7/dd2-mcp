@@ -1340,7 +1340,7 @@ def dd2_give_item(item_id: int, count: int = 1) -> str:
         f"{item_id}, {count}, D.player()) end)\nreturn before", phase="update")
     if not res.get("ok"):
         return game.format_result(res)
-    before = res.get("result")
+    before = (res.get("ret") or ["?"])[0]
     time.sleep(0.5)
     res = game.eval_lua(f"return 'before {before}, after ' .. D.item_count({item_id}) .. (D._nq_err and (' err ' .. D._nq_err) or '')", phase="update")
     return game.format_result(res)
