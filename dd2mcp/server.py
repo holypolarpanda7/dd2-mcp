@@ -1332,11 +1332,17 @@ def dd2_items(name: str) -> str:
 @mcp.tool()
 def dd2_give_item(item_id: int, count: int = 1) -> str:
     """Give the player an item (update phase) and report the before/after count in the player's storage.
-    Works for every category incl. quest letters (verified with Torn Letter 376, 2026-10-26)."""
+    Works for every category incl. quest letters (verified with Torn Letter 376, 2026-10-26) and perishables (food: through D.native)."""
+    # inside the game's own item update (D.native, bridge 0.11.0+): a perishable item given straight from Lua crashes the game (2026-11-24)
     res = game.eval_lua(
         f"local before = D.item_count({item_id})\n"
-        f"D.call(sdk.get_managed_singleton('app.ItemManager'), 'getItem(System.Int32, System.Int32, app.Character)', {item_id}, {count}, D.player())\n"
-        f"return 'before ' .. before .. ', after ' .. D.item_count({item_id})", phase="update")
+        f"D.native(function() sdk.get_managed_singleton('app.ItemManager'):call('getItem(System.Int32, System.Int32, app.Character)', "
+        f"{item_id}, {count}, D.player()) end)\nreturn before", phase="update")
+    if not res.get("ok"):
+        return game.format_result(res)
+    before = (res.get("ret") or ["?"])[0]
+    time.sleep(0.5)
+    res = game.eval_lua(f"return 'before {before}, after ' .. D.item_count({item_id}) .. (D._nq_err and (' err ' .. D._nq_err) or '')", phase="update")
     return game.format_result(res)
 
 
