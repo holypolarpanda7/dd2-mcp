@@ -81,3 +81,20 @@ does not need (hooks off, mod off, save off) before explaining it. Reading the e
 - Lua threads can be measured: `thread.get_id()` per callback/hook, a `setmetatable({}, {__gc=...})` sentinel for finalizers. DD2: `on_frame`, UpdateBehavior
   and finalizers share the main thread; `sdk.hook` bodies run on many worker threads. REFramework stops Lua's own collector and collects at EndRendering.
 - Reading a count through a Lua handle changes it: read the header through `sdk.to_valuetype(address, "System.Int32")` instead.
+
+## Calls that make, sort or release managed objects: run them inside a native update (2026-11-24)
+`ItemManager.getItem` of a PERISHABLE item (food: row `_Decay` > 0) adds a record to a decay list and sorts it. Called from a Lua callback
+(UpdateBehavior entry, `re.on_frame`) a sort that moves entries corrupted the engine: random crash seconds later, native items too (dead
+after 1-2 grants; 60 clean when the new record lands at the end, or for items that do not spoil). The same call made inside a hook on
+the game's own method is clean (60 of 60):
+```lua
+local q = {}
+sdk.hook(sdk.find_type_definition("app.ItemManager"):get_method("onUpdate"), function()
+    local l = q; q = {}
+    for _, f in ipairs(l) do pcall(f) end
+end, nil)
+q[#q + 1] = function() itemManager:call("getItem(System.Int32, System.Int32, app.Character)", id, 1, player) end
+```
+Mechanism not proven (the engine's per-thread local-object table, as with fresh-object defaults above). The bridge has it as `D.native(fn)`
+(0.11.0+; `dd2_give_item` uses it). Try it first for any spawn/create/remove call that crashes "randomly later".
+A hook body runs on the caller's thread: pick a method that runs on the main thread (ItemManager.onUpdate does).

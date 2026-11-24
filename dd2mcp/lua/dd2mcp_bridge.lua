@@ -11,7 +11,7 @@ local DATA = "dd2mcp/"
 local CMD, RESULT = DATA .. "in.lua", DATA .. "out.json"
 
 D = D or {}
-D.version = "0.10.0"
+D.version = "0.11.0"
 local next_poll, queued = 0, nil  -- the last command id lives on D (D.last_id) so a reload cannot re-run it
 
 function D.show(v)
@@ -115,6 +115,26 @@ function D.item_count(item_id, storage)
         if p:get_field("_ItemId") == item_id then n = n + p:get_field("_Num") end
     end
     return n
+end
+
+-- Run fn inside the game's OWN update (a hook on ItemManager.onUpdate) at the next frame. Engine calls that make, sort or release managed
+-- objects can corrupt the engine when made from a Lua callback (perishable getItem: dead after 1-2 grants, docs/lessons/memory-safety.md).
+D._nq = D._nq or {}
+function D.native(fn)
+    if not D._nq_hooked then
+        D._nq_hooked = true
+        sdk.hook(sdk.find_type_definition("app.ItemManager"):get_method("onUpdate"), function()
+            local q = D._nq
+            if #q == 0 then return end
+            D._nq = {}
+            for _, f in ipairs(q) do
+                local ok, err = pcall(f)
+                D._nq_n = (D._nq_n or 0) + 1
+                if not ok then D._nq_err = tostring(err) end
+            end
+        end, function(r) return r end)
+    end
+    D._nq[#D._nq + 1] = fn
 end
 
 -- Most recently changed storage entries across every storage (player, pawns, stash), newest
